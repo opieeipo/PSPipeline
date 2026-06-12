@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PSPipeline Designer</title>
+<!--
+  PSPipeline Designer (stub) — a single-file, zero-install visual pipeline
+  editor. No server, no build step, no network access: open this file in any
+  modern browser, including on locked-down machines.
+
+  Build a flow on the canvas, then:
+    * "Save JSON"  — download the pipeline definition (pipeline.schema.json)
+    * "PowerShell" — download a wrapper script; for a fully standalone script
+                     run ConvertTo-PSPipelineScript from the PSPipeline module.
+-->
+<style>
+  :root {
+    --bg: #1e2227; --panel: #262b33; --panel2: #2d333d; --line: #3a414d;
+    --text: #d7dce3; --muted: #8b94a3; --accent: #4f9cf9;
+    --input: #67c277; --transform: #4f9cf9; --output: #e0a14f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  #toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #toolbar h1 { font-size: 14px; margin: 0 12px 0 0; color: var(--accent); }
+  #toolbar input[type=text] { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 5px 8px; border-radius: 4px; width: 220px; }
+  #toolbar button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 5px 12px; border-radius: 4px; cursor: pointer; }
+  #toolbar button:hover { border-color: var(--accent); }
+  #toolbar .spacer { flex: 1; }
+
+  #main { display: flex; flex: 1; min-height: 0; }
+
+  #palette { width: 185px; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 8px; }
+  #palette h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 12px 4px 6px; }
+  .palette-item { padding: 7px 10px; margin: 3px 0; background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 4px; cursor: grab; user-select: none; }
+  .palette-item:hover { border-color: var(--accent); }
+  .palette-item.cat-input { border-left-color: var(--input); }
+  .palette-item.cat-transform { border-left-color: var(--transform); }
+  .palette-item.cat-output { border-left-color: var(--output); }
+
+  #canvas-wrap { flex: 1; position: relative; overflow: auto; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 24px 24px; }
+  #canvas { position: relative; width: 2400px; height: 1600px; }
+  #edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #edges path { stroke: var(--muted); stroke-width: 2; fill: none; pointer-events: stroke; cursor: pointer; }
+  #edges path.selected { stroke: var(--accent); stroke-width: 3; }
+  #edges path.pending { stroke: var(--accent); stroke-dasharray: 6 4; }
+
+  .node { position: absolute; width: 168px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 3px 10px rgba(0,0,0,.35); user-select: none; }
+  .node.selected { border-color: var(--accent); }
+  .node .head { padding: 6px 10px; font-weight: 600; border-radius: 6px 6px 0 0; cursor: move; border-bottom: 1px solid var(--line); }
+  .node.cat-input .head { background: rgba(103,194,119,.16); }
+  .node.cat-transform .head { background: rgba(79,156,249,.16); }
+  .node.cat-output .head { background: rgba(224,161,79,.16); }
+  .node .body { padding: 6px 10px 8px; color: var(--muted); font-size: 11px; min-height: 26px; word-break: break-all; }
+  .port { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--panel2); border: 2px solid var(--muted); cursor: crosshair; }
+  .port:hover, .port.armed { border-color: var(--accent); background: var(--accent); }
+  .port.in { left: -7px; }
+  .port.out { right: -7px; top: 50%; margin-top: -6px; }
+  .port-label { position: absolute; left: 10px; font-size: 9px; color: var(--muted); margin-top: -7px; }
+
+  #props { width: 280px; background: var(--panel); border-left: 1px solid var(--line); padding: 12px; overflow-y: auto; }
+  #props h2 { font-size: 12px; margin: 0 0 10px; }
+  #props label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 3px; }
+  #props input, #props select, #props textarea { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 5px 7px; border-radius: 4px; font: inherit; }
+  #props textarea { min-height: 84px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  #props .hint { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  #props button.danger { margin-top: 14px; width: 100%; background: none; border: 1px solid #b05050; color: #d98080; padding: 6px; border-radius: 4px; cursor: pointer; }
+
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; }
+  #modal.open { display: flex; }
+  #modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; width: min(760px, 90vw); max-height: 85vh; display: flex; flex-direction: column; padding: 16px; }
+  #modal pre { flex: 1; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 10px; font-size: 11px; }
+  #modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+  #modal button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+
+  #status { padding: 4px 12px; font-size: 11px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>PSPipeline Designer</h1>
+  <input type="text" id="pipeline-name" value="my-pipeline" title="Pipeline name">
+  <button id="btn-new">New</button>
+  <button id="btn-open">Open JSON</button>
+  <button id="btn-save">Save JSON</button>
+  <div class="spacer"></div>
+  <button id="btn-generate">⚡ Generate PowerShell</button>
+  <input type="file" id="file-open" accept=".json" hidden>
+</div>
+
+<div id="main">
+  <div id="palette"></div>
+  <div id="canvas-wrap">
+    <div id="canvas">
+      <svg id="edges"></svg>
+    </div>
+  </div>
+  <div id="props"><h2>Properties</h2><div id="props-body"><p class="hint">Select a node to edit it. Tip: drag a .csv / .json / .xlsx file onto the canvas to create an input node.</p></div></div>
+</div>
+
+<div id="status">Ready — drag nodes from the palette, click an output port then an input port to connect.</div>
+
+<div id="modal">
+  <div class="box">
+    <h2 id="modal-title">Generated PowerShell</h2>
+    <pre id="modal-pre"></pre>
+    <div class="row">
+      <button id="modal-copy">Copy</button>
+      <button id="modal-download">Download .ps1</button>
+      <button id="modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ---------------------------------------------------------------------------
+// Node catalog — must stay in sync with Invoke-PipelineNode in
+// src/PSPipeline/Core/PipelineFunctions.ps1 and schemas/pipeline.schema.json.
+// Field types: text | select | list (comma separated -> array) | json (textarea)
+// ---------------------------------------------------------------------------
+const NODE_TYPES = {
+  'input.csv':  { name: 'CSV File', cat: 'input', inputs: [], fields: [
+    { key: 'path', label: 'File path', type: 'text', placeholder: 'data\\input.csv' },
+    { key: 'delimiter', label: 'Delimiter (default ,)', type: 'text' } ] },
+  'input.json': { name: 'JSON File', cat: 'input', inputs: [], fields: [
+    { key: 'path', label: 'File path', type: 'text' } ] },
+  'input.excel': { name: 'Excel File', cat: 'input', inputs: [], fields: [
+    { key: 'path', label: 'File path', type: 'text' },
+    { key: 'worksheet', label: 'Worksheet (optional)', type: 'text' } ] },
+
+  'transform.select': { name: 'Select Columns', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'columns', label: 'Columns to keep (comma separated)', type: 'list' } ] },
+  'transform.drop': { name: 'Drop Columns', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'columns', label: 'Columns to remove (comma separated)', type: 'list' } ] },
+  'transform.rename': { name: 'Rename Columns', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'renames', label: 'Renames (JSON)', type: 'json', placeholder: '[\n  { "from": "OldName", "to": "NewName" }\n]' } ] },
+  'transform.derive': { name: 'Derived Column', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'name', label: 'New column name', type: 'text' },
+    { key: 'template', label: 'Template, e.g. {First} {Last}', type: 'text' } ] },
+  'transform.filter': { name: 'Filter Rows', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'match', label: 'Match', type: 'select', options: ['All', 'Any'] },
+    { key: 'conditions', label: 'Conditions (JSON)', type: 'json',
+      placeholder: '[\n  { "column": "Status", "operator": "eq", "value": "Completed" }\n]',
+      hint: 'Operators: eq ne gt ge lt le contains startswith endswith isempty isnotempty' } ] },
+  'transform.sort': { name: 'Sort', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'sortBy', label: 'Sort by (JSON)', type: 'json', placeholder: '[\n  { "column": "Amount", "descending": true }\n]' } ] },
+  'transform.distinct': { name: 'Distinct', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'columns', label: 'Key columns (blank = whole row)', type: 'list' } ] },
+  'transform.join': { name: 'Join', cat: 'transform', inputs: ['left', 'right'], fields: [
+    { key: 'joinType', label: 'Join type', type: 'select', options: ['Inner', 'Left', 'Right', 'Full'] },
+    { key: 'leftKey', label: 'Left key column', type: 'text' },
+    { key: 'rightKey', label: 'Right key column', type: 'text' } ] },
+  'transform.aggregate': { name: 'Aggregate', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'groupBy', label: 'Group by columns (comma separated)', type: 'list' },
+    { key: 'aggregations', label: 'Aggregations (JSON)', type: 'json',
+      placeholder: '[\n  { "column": "Amount", "function": "Sum", "as": "Total" }\n]',
+      hint: 'Functions: Count Sum Average Min Max First' } ] },
+
+  'output.csv': { name: 'Write CSV', cat: 'output', inputs: ['in'], fields: [
+    { key: 'path', label: 'Output path', type: 'text', placeholder: 'output\\result.csv' },
+    { key: 'delimiter', label: 'Delimiter (default ,)', type: 'text' } ] },
+  'output.json': { name: 'Write JSON', cat: 'output', inputs: ['in'], fields: [
+    { key: 'path', label: 'Output path', type: 'text' } ] },
+  'output.excel': { name: 'Write Excel', cat: 'output', inputs: ['in'], fields: [
+    { key: 'path', label: 'Output path', type: 'text' },
+    { key: 'worksheet', label: 'Worksheet', type: 'text' } ] }
+};
+
+// --- State -----------------------------------------------------------------
+let nodes = [];          // { id, type, label, x, y, config }
+let edges = [];          // { from, to, toPort }
+let nextId = 1;
+let selectedNode = null;
+let selectedEdge = null;
+let pendingFrom = null;  // node id with an armed output port
+
+const canvas = document.getElementById('canvas');
+const edgesSvg = document.getElementById('edges');
+const statusBar = document.getElementById('status');
+
+function setStatus(msg) { statusBar.textContent = msg; }
+function nodeType(n) { return NODE_TYPES[n.type]; }
+function byId(id) { return nodes.find(n => n.id === id); }
+
+// --- Palette ---------------------------------------------------------------
+(function buildPalette() {
+  const palette = document.getElementById('palette');
+  const groups = { input: 'Inputs', transform: 'Transforms', output: 'Outputs' };
+  for (const [cat, title] of Object.entries(groups)) {
+    const h = document.createElement('h2');
+    h.textContent = title;
+    palette.appendChild(h);
+    for (const [type, def] of Object.entries(NODE_TYPES)) {
+      if (def.cat !== cat) continue;
+      const item = document.createElement('div');
+      item.className = 'palette-item cat-' + cat;
+      item.textContent = def.name;
+      item.draggable = true;
+      item.addEventListener('dragstart', e => e.dataTransfer.setData('node-type', type));
+      item.addEventListener('click', () => addNode(type, 80 + nodes.length * 16, 80 + nodes.length * 16));
+      palette.appendChild(item);
+    }
+  }
+})();
+
+// --- Canvas drop: palette items and real data files ------------------------
+canvas.parentElement.addEventListener('dragover', e => e.preventDefault());
+canvas.parentElement.addEventListener('drop', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const type = e.dataTransfer.getData('node-type');
+  if (type) { addNode(type, x, y); return; }
+  // Dropping a real file creates a matching input node. Browsers only expose
+  // the file NAME (not its full path) — edit the path in the properties panel.
+  for (const file of e.dataTransfer.files) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const map = { csv: 'input.csv', txt: 'input.csv', json: 'input.json', xlsx: 'input.excel', xls: 'input.excel' };
+    if (map[ext]) {
+      const n = addNode(map[ext], x, y);
+      n.config.path = file.name;
+      n.label = file.name;
+      renderAll(); selectNode(n.id);
+      setStatus('Added input for "' + file.name + '" — set its full path in the properties panel.');
+    }
+  }
+});
+
+// --- Node CRUD ---------------------------------------------------------------
+function addNode(type, x, y) {
+  const def = NODE_TYPES[type];
+  const node = { id: 'n' + (nextId++), type, label: def.name, x: Math.max(0, x), y: Math.max(0, y), config: {} };
+  if (type === 'transform.join') node.config.joinType = 'Inner';
+  if (type === 'transform.filter') node.config.match = 'All';
+  nodes.push(node);
+  renderAll(); selectNode(node.id);
+  return node;
+}
+
+function deleteNode(id) {
+  nodes = nodes.filter(n => n.id !== id);
+  edges = edges.filter(e => e.from !== id && e.to !== id);
+  if (selectedNode === id) selectedNode = null;
+  renderAll(); renderProps();
+}
+
+// --- Rendering ----------------------------------------------------------------
+function renderAll() { renderNodes(); renderEdges(); }
+
+function renderNodes() {
+  canvas.querySelectorAll('.node').forEach(el => el.remove());
+  for (const node of nodes) {
+    const def = nodeType(node);
+    const el = document.createElement('div');
+    el.className = 'node cat-' + def.cat + (node.id === selectedNode ? ' selected' : '');
+    el.style.left = node.x + 'px';
+    el.style.top = node.y + 'px';
+    el.dataset.id = node.id;
+
+    const head = document.createElement('div');
+    head.className = 'head';
+    head.textContent = node.label;
+    el.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'body';
+    body.textContent = summarize(node);
+    el.appendChild(body);
+
+    def.inputs.forEach((port, i) => {
+      const p = document.createElement('div');
+      p.className = 'port in';
+      p.style.top = (34 + i * 22) + 'px';
+      p.dataset.port = port;
+      p.title = 'input: ' + port;
+      el.appendChild(p);
+      if (def.inputs.length > 1) {
+        const lbl = document.createElement('div');
+        lbl.className = 'port-label';
+        lbl.style.top = (34 + i * 22) + 'px';
+        lbl.textContent = port;
+        el.appendChild(lbl);
+      }
+      p.addEventListener('click', ev => { ev.stopPropagation(); finishEdge(node.id, port); });
+    });
+
+    if (def.cat !== 'output' || true) {  // outputs pass data through, so every node has an out port
+      const p = document.createElement('div');
+      p.className = 'port out' + (pendingFrom === node.id ? ' armed' : '');
+      el.appendChild(p);
+      p.addEventListener('click', ev => { ev.stopPropagation(); startEdge(node.id); });
+    }
+
+    head.addEventListener('mousedown', ev => beginDrag(node, ev));
+    el.addEventListener('mousedown', () => selectNode(node.id));
+    canvas.appendChild(el);
+  }
+}
+
+function summarize(node) {
+  const c = node.config;
+  switch (node.type) {
+    case 'input.csv': case 'input.json': case 'input.excel':
+    case 'output.csv': case 'output.json': case 'output.excel':
+      return c.path || '(no path set)';
+    case 'transform.join':
+      return (c.joinType || 'Inner') + ' on ' + (c.leftKey || '?') + ' = ' + (c.rightKey || '?');
+    case 'transform.filter':
+      return (c.conditions ? c.conditions.length : 0) + ' condition(s), match ' + (c.match || 'All');
+    case 'transform.aggregate':
+      return 'by ' + ((c.groupBy || []).join(', ') || '?');
+    case 'transform.select': case 'transform.drop':
+      return (c.columns || []).join(', ') || '(no columns)';
+    case 'transform.derive':
+      return c.name ? c.name + ' = ' + (c.template || '') : '(not configured)';
+    default: return node.type;
+  }
+}
+
+function portPosition(nodeId, port) {
+  const node = byId(nodeId);
+  const def = nodeType(node);
+  if (port === 'out') return { x: node.x + 168, y: node.y + 40 };
+  const index = Math.max(0, def.inputs.indexOf(port));
+  return { x: node.x, y: node.y + 40 + index * 22 };
+}
+
+function renderEdges() {
+  edgesSvg.innerHTML = '';
+  edges.forEach((edge, i) => {
+    const a = portPosition(edge.from, 'out');
+    const b = portPosition(edge.to, edge.toPort);
+    const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`);
+    if (i === selectedEdge) path.classList.add('selected');
+    path.addEventListener('click', ev => { ev.stopPropagation(); selectedEdge = i; selectedNode = null; renderAll(); renderProps(); });
+    edgesSvg.appendChild(path);
+  });
+}
+
+// --- Edge creation ------------------------------------------------------------
+function startEdge(fromId) {
+  pendingFrom = (pendingFrom === fromId) ? null : fromId;
+  renderNodes();
+  setStatus(pendingFrom ? 'Now click an input port on the destination node…' : 'Connection cancelled.');
+}
+
+function finishEdge(toId, toPort) {
+  if (!pendingFrom) { setStatus('Click an output port first, then an input port.'); return; }
+  if (pendingFrom === toId) { setStatus('Cannot connect a node to itself.'); return; }
+  edges = edges.filter(e => !(e.to === toId && e.toPort === toPort)); // one edge per input port
+  edges.push({ from: pendingFrom, to: toId, toPort });
+  pendingFrom = null;
+  renderAll();
+  setStatus('Connected.');
+}
+
+// --- Node dragging --------------------------------------------------------------
+function beginDrag(node, ev) {
+  ev.preventDefault();
+  const startX = ev.clientX, startY = ev.clientY, origX = node.x, origY = node.y;
+  function move(e) {
+    node.x = Math.max(0, origX + e.clientX - startX);
+    node.y = Math.max(0, origY + e.clientY - startY);
+    const el = canvas.querySelector('.node[data-id="' + node.id + '"]');
+    el.style.left = node.x + 'px'; el.style.top = node.y + 'px';
+    renderEdges();
+  }
+  function up() { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); }
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+}
+
+// --- Selection / properties panel ---------------------------------------------
+function selectNode(id) { selectedNode = id; selectedEdge = null; renderNodes(); renderProps(); }
+
+canvas.addEventListener('mousedown', e => {
+  if (e.target === canvas || e.target === edgesSvg) { selectedNode = null; selectedEdge = null; pendingFrom = null; renderAll(); renderProps(); }
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+  if (selectedEdge !== null) { edges.splice(selectedEdge, 1); selectedEdge = null; renderAll(); }
+  else if (selectedNode) deleteNode(selectedNode);
+});
+
+function renderProps() {
+  const box = document.getElementById('props-body');
+  box.innerHTML = '';
+  const node = byId(selectedNode);
+  if (!node) {
+    box.innerHTML = '<p class="hint">Select a node to edit it. Tip: drag a .csv / .json / .xlsx file onto the canvas to create an input node.</p>';
+    return;
+  }
+  const def = nodeType(node);
+
+  addField(box, 'Label', 'text', node.label, v => { node.label = v; renderNodes(); });
+
+  for (const field of def.fields) {
+    const current = node.config[field.key];
+    if (field.type === 'list') {
+      addField(box, field.label, 'text', (current || []).join(', '), v => {
+        node.config[field.key] = v.split(',').map(s => s.trim()).filter(Boolean);
+        renderNodes();
+      });
+    } else if (field.type === 'select') {
+      const label = document.createElement('label'); label.textContent = field.label; box.appendChild(label);
+      const sel = document.createElement('select');
+      for (const opt of field.options) {
+        const o = document.createElement('option'); o.value = o.textContent = opt;
+        if (current === opt) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener('change', () => { node.config[field.key] = sel.value; renderNodes(); });
+      box.appendChild(sel);
+    } else if (field.type === 'json') {
+      const label = document.createElement('label'); label.textContent = field.label; box.appendChild(label);
+      const ta = document.createElement('textarea');
+      ta.value = current ? JSON.stringify(current, null, 2) : '';
+      ta.placeholder = field.placeholder || '';
+      ta.addEventListener('change', () => {
+        try {
+          node.config[field.key] = ta.value.trim() ? JSON.parse(ta.value) : undefined;
+          ta.style.borderColor = ''; renderNodes(); setStatus('Updated.');
+        } catch (err) { ta.style.borderColor = '#b05050'; setStatus('Invalid JSON: ' + err.message); }
+      });
+      box.appendChild(ta);
+      if (field.hint) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = field.hint; box.appendChild(h); }
+    } else {
+      addField(box, field.label, 'text', current || '', v => { node.config[field.key] = v; renderNodes(); }, field.placeholder);
+    }
+  }
+
+  const del = document.createElement('button');
+  del.className = 'danger'; del.textContent = 'Delete node';
+  del.addEventListener('click', () => deleteNode(node.id));
+  box.appendChild(del);
+}
+
+function addField(box, labelText, type, value, onChange, placeholder) {
+  const label = document.createElement('label'); label.textContent = labelText; box.appendChild(label);
+  const input = document.createElement('input');
+  input.type = type; input.value = value; if (placeholder) input.placeholder = placeholder;
+  input.addEventListener('change', () => onChange(input.value));
+  box.appendChild(input);
+}
+
+// --- Serialize / load -----------------------------------------------------------
+function toDefinition() {
+  return {
+    name: document.getElementById('pipeline-name').value || 'my-pipeline',
+    description: '',
+    version: 1,
+    nodes: nodes.map(n => ({ id: n.id, type: n.type, label: n.label, position: { x: n.x, y: n.y }, config: n.config })),
+    edges: edges.map(e => ({ from: e.from, to: e.to, toPort: e.toPort }))
+  };
+}
+
+function loadDefinition(def) {
+  document.getElementById('pipeline-name').value = def.name || 'my-pipeline';
+  nodes = (def.nodes || []).map(n => ({
+    id: n.id, type: n.type, label: n.label || (NODE_TYPES[n.type] || {}).name || n.type,
+    x: (n.position || {}).x || 50, y: (n.position || {}).y || 50, config: n.config || {}
+  }));
+  edges = (def.edges || []).map(e => ({ from: e.from, to: e.to, toPort: e.toPort || 'in' }));
+  nextId = nodes.length + 1;
+  selectedNode = null; selectedEdge = null; pendingFrom = null;
+  renderAll(); renderProps();
+}
+
+function download(filename, text) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// --- Toolbar ----------------------------------------------------------------------
+document.getElementById('btn-new').addEventListener('click', () => {
+  if (nodes.length && !confirm('Clear the current pipeline?')) return;
+  loadDefinition({ name: 'my-pipeline', nodes: [], edges: [] });
+});
+document.getElementById('btn-save').addEventListener('click', () => {
+  const def = toDefinition();
+  download(def.name + '.json', JSON.stringify(def, null, 2));
+});
+document.getElementById('btn-open').addEventListener('click', () => document.getElementById('file-open').click());
+document.getElementById('file-open').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  file.text().then(text => loadDefinition(JSON.parse(text))).catch(err => alert('Could not load: ' + err.message));
+  e.target.value = '';
+});
+
+// --- PowerShell generation ----------------------------------------------------------
+// The browser emits a thin wrapper that needs the PSPipeline module. For a
+// FULLY standalone script (no module needed), run:
+//   ConvertTo-PSPipelineScript -Path pipeline.json -OutputPath Invoke-DataPipeline.ps1
+function generateWrapper() {
+  const def = toDefinition();
+  const issues = validate(def);
+  if (issues.length) { alert('Fix these first:\n\n' + issues.join('\n')); return null; }
+  const fn = 'Invoke-' + def.name.replace(/[^A-Za-z0-9]+/g, ' ').trim().split(/\s+/)
+      .map(w => w[0].toUpperCase() + w.slice(1)).join('') + 'Pipeline';
+  const json = JSON.stringify(def, null, 2);
+  return { fn, text: [
+    '<#',
+    '    ' + fn + ' — generated by PSPipeline Designer',
+    '    Requires the PSPipeline module on the PSModulePath.',
+    '    For a fully standalone script with zero dependencies, run instead:',
+    '        ConvertTo-PSPipelineScript -Path ' + def.name + '.json -OutputPath ' + fn + '.ps1',
+    '#>',
+    'function ' + fn + ' {',
+    '    [CmdletBinding()]',
+    '    param()',
+    '',
+    "    $pipelineJson = @'",
+    json,
+    "'@",
+    '',
+    '    Import-Module PSPipeline -ErrorAction Stop',
+    '    Invoke-PSPipeline -Definition ($pipelineJson | ConvertFrom-Json)',
+    '}'
+  ].join('\r\n') };
+}
+
+function validate(def) {
+  const issues = [];
+  if (!def.nodes.length) issues.push('• The pipeline has no nodes.');
+  for (const n of def.nodes) {
+    const t = NODE_TYPES[n.type];
+    if ((n.type.startsWith('input.') || n.type.startsWith('output.')) && !n.config.path)
+      issues.push('• "' + n.label + '" has no file path.');
+    for (const port of t.inputs) {
+      if (!def.edges.some(e => e.to === n.id && (e.toPort || 'in') === port))
+        issues.push('• "' + n.label + '" input port "' + port + '" is not connected.');
+    }
+  }
+  return issues;
+}
+
+const modal = document.getElementById('modal');
+let generated = null;
+document.getElementById('btn-generate').addEventListener('click', () => {
+  generated = generateWrapper();
+  if (!generated) return;
+  document.getElementById('modal-pre').textContent = generated.text;
+  modal.classList.add('open');
+});
+document.getElementById('modal-close').addEventListener('click', () => modal.classList.remove('open'));
+document.getElementById('modal-copy').addEventListener('click', () =>
+  navigator.clipboard.writeText(generated.text).then(() => setStatus('Copied to clipboard.')));
+document.getElementById('modal-download').addEventListener('click', () => download(generated.fn + '.ps1', generated.text));
+
+renderAll();
+</script>
+</body>
+</html>

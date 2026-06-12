@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/opieeipo/PSPipeline/schemas/pipeline.schema.json",
+  "title": "PSPipeline pipeline definition",
+  "description": "A directed acyclic graph of data nodes saved by the PSPipeline visual designer and executed by Invoke-PSPipeline or a generated standalone script.",
+  "type": "object",
+  "required": ["name", "version", "nodes", "edges"],
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "config"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "input.csv", "input.json", "input.excel",
+              "transform.select", "transform.drop", "transform.rename",
+              "transform.derive", "transform.filter", "transform.sort",
+              "transform.distinct", "transform.join", "transform.aggregate",
+              "output.csv", "output.json", "output.excel"
+            ]
+          },
+          "label": { "type": "string", "description": "Display name shown on the designer canvas." },
+          "position": {
+            "type": "object",
+            "description": "Canvas coordinates; ignored by the execution engine.",
+            "properties": { "x": { "type": "number" }, "y": { "type": "number" } }
+          },
+          "config": { "type": "object", "description": "Node-type-specific settings; see docs/architecture.md for per-type shapes." }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string", "description": "Source node id." },
+          "to": { "type": "string", "description": "Destination node id." },
+          "toPort": {
+            "type": "string",
+            "enum": ["in", "left", "right"],
+            "default": "in",
+            "description": "Which input port of the destination node this edge feeds. Join nodes use 'left' and 'right'; everything else uses 'in'."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+# Normalize line endings; checkout native so .ps1 files are CRLF on Windows.
+* text=auto
+*.png binary
+*.xlsx binary

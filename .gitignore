@@ -1,0 +1,11 @@
+# Pipeline run artifacts
+samples/output/
+*.generated.ps1
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
