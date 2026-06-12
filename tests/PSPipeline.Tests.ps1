@@ -25,8 +25,38 @@ Describe 'Get-PipelineEnvironment' {
     It 'reports the running PowerShell version' {
         (Get-PipelineEnvironment).PSVersion | Should -Be $PSVersionTable.PSVersion
     }
-    It 'classifies Excel support as one of the known modes' {
-        (Get-PipelineEnvironment).ExcelSupport | Should -BeIn @('ImportExcel', 'Com', 'None')
+    It 'reports a UTF-8 BOM policy as a boolean' {
+        (Get-PipelineEnvironment).Utf8WritesBom | Should -BeOfType [bool]
+    }
+    It 'no longer exposes any Excel capability fields' {
+        (Get-PipelineEnvironment).PSObject.Properties.Name | Should -Not -Contain 'ExcelSupport'
+    }
+}
+
+Describe 'Import-PipelineFixedWidth' {
+    It 'slices fixed-width lines into trimmed columns' {
+        $file = Join-Path $TestDrive 'fixed.txt'
+        $line1 = ('1'.PadRight(5)) + ('Ada'.PadRight(20)) + ('Eng'.PadRight(5))
+        $line2 = ('2'.PadRight(5)) + ('Brian'.PadRight(20)) + ('Sales'.PadRight(5))
+        Set-Content -Path $file -Value @($line1, $line2)
+        $cols = @(
+            [pscustomobject]@{ name = 'Id';   start = 1;  length = 5 }
+            [pscustomobject]@{ name = 'Name'; start = 6;  length = 20 }
+            [pscustomobject]@{ name = 'Dept'; start = 26; length = 5 }
+        )
+        $result = & $Module { param($p, $c) Import-PipelineFixedWidth -Path $p -Columns $c } $file $cols
+        $result.Count       | Should -Be 2
+        $result[0].Id       | Should -Be '1'
+        $result[0].Name     | Should -Be 'Ada'
+        $result[1].Dept     | Should -Be 'Sales'
+    }
+    It 'honours SkipLines for header rows' {
+        $file = Join-Path $TestDrive 'fixed-hdr.txt'
+        Set-Content -Path $file -Value @('HEADER', ('7'.PadRight(5)))
+        $cols = @([pscustomobject]@{ name = 'Id'; start = 1; length = 5 })
+        $result = & $Module { param($p, $c) Import-PipelineFixedWidth -Path $p -Columns $c -SkipLines 1 } $file $cols
+        $result.Count | Should -Be 1
+        $result[0].Id | Should -Be '7'
     }
 }
 

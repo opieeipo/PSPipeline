@@ -27,8 +27,8 @@ In locked-down enterprise environments, security controls rule out most data
 tooling — but two things almost always survive:
 
 1. **PowerShell is available** (it ships with Windows and is hard to remove), and
-2. **people still need to extract, transform, and load data** — CSVs, JSON
-   extracts, Excel workbooks — usually by hand, badly, in Excel.
+2. **people still need to extract, transform, and load data** (CSVs, tab-delimited
+   extracts, JSON, fixed-width text) usually by hand, badly, in a spreadsheet.
 
 The transform step is the gap. Real ETL platforms (Alteryx, Databricks,
 DataStage) need licenses, installs, and network egress you won't get approved.
@@ -87,11 +87,11 @@ deployment story.
 
 | Category | Nodes |
 | --- | --- |
-| **Inputs** | CSV (any delimiter), JSON, Excel |
+| **Inputs** | Delimited text (CSV, TSV, pipe, any delimiter, flat `.txt`), Fixed-width, JSON |
 | **Column ops** | Select, Drop, Rename, Derived column (`{First} {Last}` templates) |
 | **Row ops** | Filter (eq, ne, gt, ge, lt, le, contains, startswith, endswith, isempty, isnotempty; All/Any), Sort, Distinct |
-| **Combine** | **Join — Inner, Left, Right, Full outer** (hash join, key-collision-safe), Aggregate (Count, Sum, Average, Min, Max, First with Group By) |
-| **Outputs** | CSV, JSON, Excel |
+| **Combine** | **Join (Inner, Left, Right, Full outer)** (hash join, key-collision-safe), Aggregate (Count, Sum, Average, Min, Max, First with Group By) |
+| **Outputs** | Delimited text (any delimiter), JSON |
 
 ## Built for hostile environments
 
@@ -99,14 +99,10 @@ These are design constraints, not afterthoughts:
 
 - **PowerShell 5.1 and up.** Everything runs on the Windows PowerShell that
   ships in the box, and on PowerShell 7+ identically.
-- **Environment-aware.** `Get-PipelineEnvironment` detects the host at runtime —
-  PS version/edition, OS, Constrained Language Mode, and what Excel support
-  exists — and the engine adapts:
-  - Excel nodes use the **ImportExcel module** if present, fall back to
-    **Excel COM** if Office is installed (and language mode allows it), and
-    otherwise fail with a plain-English workaround.
-  - CSV output is byte-identical across hosts (UTF-8 with BOM, so Excel opens
-    it correctly), papering over the 5.1 vs 7+ encoding difference.
+- **Environment-aware.** `Get-PipelineEnvironment` detects the host at runtime
+  (PS version/edition, OS, Constrained Language Mode) and the engine adapts.
+  Delimited-text output is byte-identical across hosts (UTF-8 with BOM, so
+  spreadsheets open it correctly), papering over the 5.1 vs 7+ encoding difference.
 - **Constrained Language Mode friendly.** No `Add-Type`, no
   `Invoke-Expression`, no compiling user input into code — the derived-column
   node is a string template precisely so pipelines never execute arbitrary
@@ -133,15 +129,17 @@ PSPipeline/
 ## Roadmap
 
 - [x] Core engine: inputs, column/row transforms, joins, aggregate, outputs
-- [x] Environment detection and adaptive Excel / encoding behavior
+- [x] Environment detection and adaptive encoding behavior
+- [x] Plain-text formats only: delimited text, fixed-width, JSON (Excel removed by design)
 - [x] Standalone script generation (`ConvertTo-PSPipelineScript`)
 - [x] Designer: palette, canvas, connections, properties, JSON round-trip
-- [ ] Friendly form builders for filter/aggregate config (currently JSON textareas — the target users shouldn't have to write JSON)
-- [ ] Data preview in the designer (sample rows at each node)
-- [ ] Excel COM **writer** fallback (reader exists)
-- [ ] More nodes: union/append, pivot/unpivot, lookup, type casting, fixed-width input
+- [x] Data preview in the designer: live sample rows at every node (in-browser preview executor, verified against the PowerShell output) plus column-aware fields, via the browser File API
+- [x] Friendly form builders for filter/sort/aggregate/rename and column pickers (no more JSON textareas, except the fixed-width column spec)
+- [x] In-browser standalone script generation (the designer emits the zero-dependency `.ps1` directly)
+- [x] Cross-platform code generation: a POSIX `sh` + `awk` backend alongside PowerShell (delimited + fixed-width input, all transforms, delimited output; JSON pending)
+- [ ] PowerShell 7+ performance target: a separate backend using 7-only features (`ForEach-Object -Parallel`, thread jobs) to run independent DAG branches and large inputs concurrently, for less-restricted hosts (opt-in `-Parallel`/`-ThrottleLimit`, order-preserving)
+- [ ] More nodes: union/append, pivot/unpivot, lookup, type casting
 - [ ] Pipeline-level parameters (e.g. input path prompts at run time)
-- [ ] Optional WPF designer for environments where even a browser is restricted
 - [ ] PowerShell Gallery publication
 
 ## Running the tests

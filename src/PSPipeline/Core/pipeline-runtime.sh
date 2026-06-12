@@ -1,0 +1,43 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# PSPipeline shell runtime -- the *nix analog of Core/PipelineFunctions.ps1.
+# Inlined verbatim at the top of every generated POSIX sh + awk script, then
+# followed by a compiled body that chains one awk step per pipeline node.
+#
+# Hard constraints (mirror the PowerShell engine's):
+#   * POSIX sh + POSIX awk only -- no bash-isms, no gawk extensions, so it runs
+#     on busybox/mawk/nawk as well as gawk. No installs, no network.
+#   * Intermediate data between nodes is unit-separator (US, 0x1F) delimited with
+#     a header row first, so commas/tabs inside data never clash between steps.
+#     Only input nodes parse the source format; only output nodes emit it.
+#
+# String comparisons are case-insensitive to match the PowerShell engine
+# (PowerShell -eq/-lt/-like and Sort-Object are case-insensitive by default).
+# ---------------------------------------------------------------------------
+set -eu
+
+# Optional first argument: a base directory that relative input/output paths
+# resolve against (the analog of -BasePath in the PowerShell script).
+BASE="${1:-.}"
+cd "$BASE"
+
+WORK="$(mktemp -d 2>/dev/null || mktemp -d -t pspl)"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+US=$(printf '\037')
+
+AWKLIB='
+function trim(s){ sub(/^[ \t\r\n]+/,"",s); sub(/[ \t\r\n]+$/,"",s); return s }
+function is_num(x){ return (x ~ /^[ \t]*[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?[ \t]*$/) }
+function cmp(a,b){ if(is_num(a)&&is_num(b)){a+=0;b+=0;return (a<b)?-1:(a>b?1:0)} a=tolower(a);b=tolower(b);return (a<b)?-1:(a>b?1:0) }
+function op_eq(a,b){ return (is_num(a)&&is_num(b)) ? (a+0==b+0) : (tolower(a)==tolower(b)) }
+function csv_split(line, D, arr,   n,i,c,field,len,inq){
+  n=0; field=""; len=length(line); inq=0
+  for(i=1;i<=len;i++){ c=substr(line,i,1)
+    if(inq){ if(c=="\""){ if(substr(line,i+1,1)=="\""){field=field "\"";i++} else inq=0 } else field=field c }
+    else { if(c=="\""){inq=1} else if(c==D){n++;arr[n]=field;field=""} else field=field c }
+  }
+  n++; arr[n]=field; return n
+}
+function csv_quote(s){ gsub(/"/,"\"\"",s); return "\"" s "\"" }
+'
+# --- compiled pipeline body follows ---

@@ -19,11 +19,11 @@
           "type": {
             "type": "string",
             "enum": [
-              "input.csv", "input.json", "input.excel",
+              "input.csv", "input.fixedwidth", "input.json",
               "transform.select", "transform.drop", "transform.rename",
               "transform.derive", "transform.filter", "transform.sort",
               "transform.distinct", "transform.join", "transform.aggregate",
-              "output.csv", "output.json", "output.excel"
+              "output.csv", "output.json"
             ]
           },
           "label": { "type": "string", "description": "Display name shown on the designer canvas." },
