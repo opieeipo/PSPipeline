@@ -175,6 +175,31 @@ Describe 'Richer aggregations' {
     }
 }
 
+Describe 'Unpivot / Pivot' {
+    It 'unpivots wide columns into attribute/value rows' {
+        $data = @([pscustomobject]@{ Region = 'East'; Q1 = '10'; Q2 = '20' })
+        $r = & $Module { param($d) Convert-PipelineUnpivot -Data $d -Keep @('Region') -AttributeName 'Quarter' -ValueName 'Amount' } $data
+        $r.Count | Should -Be 2
+        $r[0].Region  | Should -Be 'East'
+        $r[0].Quarter | Should -Be 'Q1'
+        $r[0].Amount  | Should -Be '10'
+        $r[1].Quarter | Should -Be 'Q2'
+        $r[1].Amount  | Should -Be '20'
+    }
+    It 'pivots long rows into data-dependent columns' {
+        $data = @(
+            [pscustomobject]@{ Region = 'East'; Quarter = 'Q1'; Amount = '10' }
+            [pscustomobject]@{ Region = 'East'; Quarter = 'Q2'; Amount = '20' }
+            [pscustomobject]@{ Region = 'West'; Quarter = 'Q1'; Amount = '5' }
+        )
+        $r = & $Module { param($d) Convert-PipelinePivot -Data $d -GroupBy @('Region') -PivotColumn 'Quarter' -ValueColumn 'Amount' -Aggregate 'First' } $data
+        (($r[0].PSObject.Properties.Name) -join ',') | Should -Be 'Region,Q1,Q2'
+        $r[0].Q1 | Should -Be '10'
+        $r[0].Q2 | Should -Be '20'
+        ($r | Where-Object { $_.Region -eq 'West' }).Q2 | Should -Be ''
+    }
+}
+
 Describe 'Union / append' {
     It 'stacks rows and unions columns in first-appearance order' {
         $a = @([pscustomobject]@{ Id = '1'; Name = 'Ada' })

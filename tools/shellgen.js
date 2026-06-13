@@ -270,6 +270,18 @@ function genNode(def, node) {
            + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
       return label + '\n' + awkStep(prog, files, node.id);
     }
+    case 'transform.unpivot': {
+      const keepInit = (cfg.keep || []).map(k => 'keep[' + aws(String(k)) + ']=1;').join(' ');
+      const attr = aws(String(cfg.attributeName || 'Attribute'));
+      const val = aws(String(cfg.valueName || 'Value'));
+      prog = 'BEGIN{FS=US;OFS=US; ' + keepInit + '}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++) name[i]=$i; kn=0; vn=0; for(i=1;i<=NF;i++){ if($i in keep){ ki[++kn]=i } else { vi[++vn]=i } } '
+           + 'h=""; for(j=1;j<=kn;j++) h=h (j>1?OFS:"") name[ki[j]]; if(kn>0) h=h OFS; h=h ' + attr + ' OFS ' + val + '; print h; next }\n'
+           + '{ for(v=1;v<=vn;v++){ line=""; for(j=1;j<=kn;j++) line=line (j>1?OFS:"") $(ki[j]); if(kn>0) line=line OFS; line=line name[vi[v]] OFS $(vi[v]); print line } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.pivot':
+      throw new Error("Pivot is not supported in the shell target (its output columns are data-dependent); use the PowerShell or M target for node '" + node.id + "'.");
     case 'transform.join': {
       const jt = String(cfg.joinType || 'Inner');
       const right = wf(ins['right']), left = wf(ins['left']);

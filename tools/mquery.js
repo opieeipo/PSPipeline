@@ -154,6 +154,15 @@
         const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
         return 'Table.Combine({' + sources.map(ref).join(', ') + '})';
       }
+      case 'transform.unpivot':
+        return 'Table.UnpivotOtherColumns(' + inn() + ', ' + mList(cfg.keep || []) + ', ' + mStr(cfg.attributeName || 'Attribute') + ', ' + mStr(cfg.valueName || 'Value') + ')';
+      case 'transform.pivot': {
+        // Table.Pivot groups by every column that is not the attribute/value column,
+        // so the input should carry only the groupBy + pivot + value columns.
+        const aggm = { Sum: ', each List.Sum(List.Transform(_, each try Number.From(_) otherwise null))', Count: ', each List.Count(_)', First: ', each List.First(_)' }[String(cfg.aggregate || 'First')] || ', each List.First(_)';
+        const pv = 'List.Distinct(List.Transform(Table.Column(' + inn() + ', ' + mStr(cfg.pivotColumn) + '), Text.From))';
+        return 'Table.Pivot(' + inn() + ', ' + pv + ', ' + mStr(cfg.pivotColumn) + ', ' + mStr(cfg.valueColumn) + aggm + ')';
+      }
       case 'output.csv': case 'output.json':
         return inn();   // Power Query has no file-write; the query result is the table
 

@@ -86,8 +86,11 @@ constraints.
    (its column count is data-dependent).
 4. **Date/time functions** + a light type layer: parse, format, extract
    (year/month/day/weekday), difference. Turns "reshape" into "actually clean."
-5. **Pivot / unpivot** (long <-> wide). Common in reporting. (Hard in awk; likely starts
-   PowerShell- and M-only.)
+5. **Pivot / unpivot** (long <-> wide). DONE -- the `transform.unpivot` node (wide to long)
+   runs in all engines and verifies byte-equal (PS/awk/preview, M via `Table.UnpivotOtherColumns`).
+   The `transform.pivot` node (long to wide) runs in PowerShell + preview + M (`Table.Pivot`);
+   its output columns are data-dependent, so the awk backend declines it with a clear message,
+   as the per-backend feasibility rule allows.
 6. **Richer aggregations** DONE -- Median, CountDistinct (case-insensitive), and StringJoin
    added to the aggregate node across all engines (PS/awk/preview/M), verified byte-equal.
    **Type casting still pending** (a light number/date normalize node, mainly useful for the
