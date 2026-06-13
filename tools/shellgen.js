@@ -4,7 +4,9 @@
 // BACKENDS.shell.generate. Pure function of (def, runtimeText) -> script string.
 
 function generateShellScript(def, runtime) {
-  return runtime.replace(/\s+$/, '') + '\n\n' + generateShellBody(def) + '\n';
+  const bad = collectTokenViolations(def);
+  if (bad.length) throw new Error('The shell target supports ${parameter} tokens only in input/output paths; found tokens in node(s): ' + bad.join(', ') + '. Use the PowerShell target, or put the parameter in a path.');
+  return runtime.replace(/\s+$/, '') + '\n\n' + shellParamBlock(def) + generateShellBody(def) + '\n';
 }
 
 // shell single-quote
@@ -17,6 +19,34 @@ function aws(s) {
 }
 function col(name) { return '$(c[' + aws(name) + '])'; }
 function wf(id) { return '"$WORK/' + id + '"'; }
+
+// --- pipeline parameters ----------------------------------------------------
+// escape for inside a double-quoted shell string
+function shDqEscape(s) { return String(s).replace(/([\\"$`])/g, '\\$1'); }
+// a path config string: ${Name} tokens -> ${P_Name} shell vars; plain literal otherwise
+function shellPath(s) {
+  s = String(s);
+  if (!/\$\{[A-Za-z0-9_]+\}/.test(s)) return shq(s);
+  let out = '"', last = 0, m; const re = /\$\{([A-Za-z0-9_]+)\}/g;
+  while ((m = re.exec(s)) !== null) { out += shDqEscape(s.slice(last, m.index)) + '${P_' + m[1] + '}'; last = re.lastIndex; }
+  return out + shDqEscape(s.slice(last)) + '"';
+}
+function shellParamBlock(def) {
+  const ps = (def.parameters || []).filter(p => p && p.name);
+  if (!ps.length) return '';
+  return ps.map(p => 'P_' + p.name + '="${PSPL_' + p.name + ':-' + shDqEscape(String(p.default == null ? '' : p.default)) + '}"').join('\n') + '\n\n';
+}
+// shell target supports ${parameter} tokens only in input/output paths
+function collectTokenViolations(def) {
+  const bad = new Set();
+  function scan(val, allowed, id) {
+    if (typeof val === 'string') { if (!allowed && /\$\{[A-Za-z0-9_]+\}/.test(val)) bad.add(id); return; }
+    if (Array.isArray(val)) { val.forEach(v => scan(v, false, id)); return; }
+    if (val && typeof val === 'object') { Object.keys(val).forEach(k => scan(val[k], false, id)); return; }
+  }
+  (def.nodes || []).forEach(n => { const cfg = n.config || {}; Object.keys(cfg).forEach(k => scan(cfg[k], k === 'path', n.id)); });
+  return [...bad];
+}
 
 function topoOrder(def) {
   const indeg = {}, adj = {};
@@ -97,7 +127,7 @@ function genNode(def, node) {
     case 'input.csv': {
       const d = cfg.delimiter ? String(cfg.delimiter) : ',';
       prog = '{ sub(/\\r$/,""); if($0=="")next; n=csv_split($0, ' + aws(d) + ', f); o=""; for(i=1;i<=n;i++) o=o (i>1?US:"") f[i]; print o }';
-      return label + '\n' + awkStep(prog, shq(String(cfg.path)), node.id);
+      return label + '\n' + awkStep(prog, shellPath(String(cfg.path)), node.id);
     }
     case 'input.fixedwidth': {
       const cols = (cfg.columns || []);
@@ -107,7 +137,7 @@ function genNode(def, node) {
       prog = 'BEGIN{ print ' + head + ' }\n'
            + (skip > 0 ? 'NR<=' + skip + '{next}\n' : '')
            + '{ sub(/\\r$/,""); if($0=="")next; print ' + extract + ' }';
-      return label + '\n' + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + shq(String(cfg.path)) + ' > ' + wf(node.id);
+      return label + '\n' + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + shellPath(String(cfg.path)) + ' > ' + wf(node.id);
     }
     case 'transform.select': {
       const cols = (cfg.columns || []).map(String);
@@ -277,9 +307,9 @@ function genNode(def, node) {
       const d = cfg.delimiter ? String(cfg.delimiter) : ',';
       const dest = String(cfg.path);
       const dir = dest.replace(/[\\/][^\\/]*$/, '');
-      const mk = (dir && dir !== dest) ? 'mkdir -p ' + shq(dir.replace(/\\/g, '/')) + '\n' : '';
+      const mk = (dir && dir !== dest) ? 'mkdir -p ' + shellPath(dir.replace(/\\/g, '/')) + '\n' : '';
       prog = 'BEGIN{FS=US}\n{ o=""; for(i=1;i<=NF;i++) o=o (i>1?' + aws(d) + ':"") csv_quote($i); print o }';
-      return label + '\n' + mk + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + wf(ins['in']) + ' > ' + shq(dest.replace(/\\/g, '/'));
+      return label + '\n' + mk + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + wf(ins['in']) + ' > ' + shellPath(dest.replace(/\\/g, '/'));
     }
     default:
       throw new Error("Unknown node type '" + t + "'.");

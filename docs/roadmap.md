@@ -86,8 +86,12 @@ constraints.
    (its cross-engine tie-ordering parity is the one fiddly bit).
 8. **Designer column profiling:** DONE -- the preview panel shows filled / distinct / min /
    max per column over the loaded sample.
-9. **Pipeline-level parameters:** prompt for input/output paths (or values) at run time in
-   the generated script.
+9. **Pipeline-level parameters:** DONE -- declare named parameters with defaults and bind
+   `${Name}` tokens into input/output paths. PowerShell exposes them as function parameters
+   (`Invoke-DataPipeline -InFile C:\june.csv`); the shell target exposes them as
+   env-overridable vars (`PSPL_InFile=... ./pipeline.sh`). The engine resolves the tokens at
+   run time. (Tokens anywhere in config work in PowerShell; the shell target restricts them
+   to paths.)
 
 ### Level of effort and sequencing
 

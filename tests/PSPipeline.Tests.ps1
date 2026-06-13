@@ -156,6 +156,31 @@ Describe 'Text operations' {
     }
 }
 
+Describe 'Pipeline parameters' {
+    It 'resolves declared defaults, overridden by -Parameters' {
+        $def = [pscustomobject]@{ parameters = @([pscustomobject]@{ name = 'Tag'; default = 'D' }) }
+        (& $Module { param($d) Resolve-PipelineParameter -Definition $d } $def)['Tag'] | Should -Be 'D'
+        (& $Module { param($d) Resolve-PipelineParameter -Definition $d -Overrides @{ Tag = 'O' } } $def)['Tag'] | Should -Be 'O'
+    }
+    It 'expands ${tokens} in nested string config' {
+        $obj = [pscustomobject]@{ config = [pscustomobject]@{ path = 'in-${Tag}.csv' } }
+        $r = & $Module { param($o) Expand-PipelineValue -Value $o -Params @{ Tag = 'X' } } $obj
+        $r.config.path | Should -Be 'in-X.csv'
+    }
+    It 'binds a parameter into an input path at run time, with override' {
+        $a = Join-Path $TestDrive 'a.csv'; Set-Content -Path $a -Value @('Id', '1', '2')
+        $b = Join-Path $TestDrive 'b.csv'; Set-Content -Path $b -Value @('Id', '9', '8', '7')
+        $def = [pscustomobject]@{
+            name = 'p'; version = 1
+            parameters = @([pscustomobject]@{ name = 'InFile'; default = $a })
+            nodes = @([pscustomobject]@{ id = 'in'; type = 'input.csv'; config = [pscustomobject]@{ path = '${InFile}' } })
+            edges = @()
+        }
+        (Invoke-PSPipeline -Definition $def)['in'].Count | Should -Be 2
+        (Invoke-PSPipeline -Definition $def -Parameters @{ InFile = $b })['in'].Count | Should -Be 3
+    }
+}
+
 Describe 'Sample pipeline end-to-end' {
     It 'runs sample-pipeline.json and writes the report' {
         $repoRoot = Split-Path -Path $PSScriptRoot -Parent

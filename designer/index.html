@@ -733,6 +733,40 @@ function Invoke-PipelineNode {
     }
 }
 
+function Expand-PipelineValue {
+    # Recursively replaces ${Name} tokens in every string value of $Value using
+    # the $Params map (name -> value). Used to bind runtime parameters into a
+    # parsed pipeline definition (paths and any other string config).
+    param($Value, [hashtable]$Params)
+    if ($null -eq $Value) { return $Value }
+    if ($Value -is [string]) {
+        $out = $Value
+        foreach ($k in $Params.Keys) { $out = $out.Replace('${' + $k + '}', [string]$Params[$k]) }
+        return $out
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $o = [ordered]@{}
+        foreach ($p in $Value.PSObject.Properties) { $o[$p.Name] = Expand-PipelineValue -Value $p.Value -Params $Params }
+        return [pscustomobject]$o
+    }
+    if ($Value -is [object[]]) {
+        return @(foreach ($item in $Value) { Expand-PipelineValue -Value $item -Params $Params })
+    }
+    return $Value
+}
+
+function Resolve-PipelineParameter {
+    # Effective parameter map = each declared parameter's default, overridden by $Overrides.
+    param($Definition, [hashtable]$Overrides = @{})
+    $vals = @{}
+    foreach ($p in @($Definition.parameters)) {
+        if ($null -eq $p -or -not $p.name) { continue }
+        $name = [string]$p.name
+        $vals[$name] = if ($Overrides.ContainsKey($name)) { [string]$Overrides[$name] } else { [string]$p.default }
+    }
+    $vals
+}
+
 function Invoke-PipelineDefinition {
     <#
     .SYNOPSIS
@@ -741,9 +775,13 @@ function Invoke-PipelineDefinition {
     #>
     param(
         [Parameter(Mandatory)]$Definition,
-        [switch]$Quiet
+        [switch]$Quiet,
+        [hashtable]$Parameters = @{}
     )
     Assert-PipelineHost
+    if ($Definition.parameters) {
+        $Definition = Expand-PipelineValue -Value $Definition -Params (Resolve-PipelineParameter -Definition $Definition -Overrides $Parameters)
+    }
     $nodesById = @{}
     foreach ($node in $Definition.nodes) { $nodesById[$node.id] = $node }
 
@@ -843,7 +881,9 @@ function txt_op(s,op,a,b){ if(op=="lower")return tolower(s); if(op=="upper")retu
 // BACKENDS.shell.generate. Pure function of (def, runtimeText) -> script string.
 
 function generateShellScript(def, runtime) {
-  return runtime.replace(/\s+$/, '') + '\n\n' + generateShellBody(def) + '\n';
+  const bad = collectTokenViolations(def);
+  if (bad.length) throw new Error('The shell target supports ${parameter} tokens only in input/output paths; found tokens in node(s): ' + bad.join(', ') + '. Use the PowerShell target, or put the parameter in a path.');
+  return runtime.replace(/\s+$/, '') + '\n\n' + shellParamBlock(def) + generateShellBody(def) + '\n';
 }
 
 // shell single-quote
@@ -856,6 +896,34 @@ function aws(s) {
 }
 function col(name) { return '$(c[' + aws(name) + '])'; }
 function wf(id) { return '"$WORK/' + id + '"'; }
+
+// --- pipeline parameters ----------------------------------------------------
+// escape for inside a double-quoted shell string
+function shDqEscape(s) { return String(s).replace(/([\\"$`])/g, '\\$1'); }
+// a path config string: ${Name} tokens -> ${P_Name} shell vars; plain literal otherwise
+function shellPath(s) {
+  s = String(s);
+  if (!/\$\{[A-Za-z0-9_]+\}/.test(s)) return shq(s);
+  let out = '"', last = 0, m; const re = /\$\{([A-Za-z0-9_]+)\}/g;
+  while ((m = re.exec(s)) !== null) { out += shDqEscape(s.slice(last, m.index)) + '${P_' + m[1] + '}'; last = re.lastIndex; }
+  return out + shDqEscape(s.slice(last)) + '"';
+}
+function shellParamBlock(def) {
+  const ps = (def.parameters || []).filter(p => p && p.name);
+  if (!ps.length) return '';
+  return ps.map(p => 'P_' + p.name + '="${PSPL_' + p.name + ':-' + shDqEscape(String(p.default == null ? '' : p.default)) + '}"').join('\n') + '\n\n';
+}
+// shell target supports ${parameter} tokens only in input/output paths
+function collectTokenViolations(def) {
+  const bad = new Set();
+  function scan(val, allowed, id) {
+    if (typeof val === 'string') { if (!allowed && /\$\{[A-Za-z0-9_]+\}/.test(val)) bad.add(id); return; }
+    if (Array.isArray(val)) { val.forEach(v => scan(v, false, id)); return; }
+    if (val && typeof val === 'object') { Object.keys(val).forEach(k => scan(val[k], false, id)); return; }
+  }
+  (def.nodes || []).forEach(n => { const cfg = n.config || {}; Object.keys(cfg).forEach(k => scan(cfg[k], k === 'path', n.id)); });
+  return [...bad];
+}
 
 function topoOrder(def) {
   const indeg = {}, adj = {};
@@ -936,7 +1004,7 @@ function genNode(def, node) {
     case 'input.csv': {
       const d = cfg.delimiter ? String(cfg.delimiter) : ',';
       prog = '{ sub(/\\r$/,""); if($0=="")next; n=csv_split($0, ' + aws(d) + ', f); o=""; for(i=1;i<=n;i++) o=o (i>1?US:"") f[i]; print o }';
-      return label + '\n' + awkStep(prog, shq(String(cfg.path)), node.id);
+      return label + '\n' + awkStep(prog, shellPath(String(cfg.path)), node.id);
     }
     case 'input.fixedwidth': {
       const cols = (cfg.columns || []);
@@ -946,7 +1014,7 @@ function genNode(def, node) {
       prog = 'BEGIN{ print ' + head + ' }\n'
            + (skip > 0 ? 'NR<=' + skip + '{next}\n' : '')
            + '{ sub(/\\r$/,""); if($0=="")next; print ' + extract + ' }';
-      return label + '\n' + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + shq(String(cfg.path)) + ' > ' + wf(node.id);
+      return label + '\n' + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + shellPath(String(cfg.path)) + ' > ' + wf(node.id);
     }
     case 'transform.select': {
       const cols = (cfg.columns || []).map(String);
@@ -1116,9 +1184,9 @@ function genNode(def, node) {
       const d = cfg.delimiter ? String(cfg.delimiter) : ',';
       const dest = String(cfg.path);
       const dir = dest.replace(/[\\/][^\\/]*$/, '');
-      const mk = (dir && dir !== dest) ? 'mkdir -p ' + shq(dir.replace(/\\/g, '/')) + '\n' : '';
+      const mk = (dir && dir !== dest) ? 'mkdir -p ' + shellPath(dir.replace(/\\/g, '/')) + '\n' : '';
       prog = 'BEGIN{FS=US}\n{ o=""; for(i=1;i<=NF;i++) o=o (i>1?' + aws(d) + ':"") csv_quote($i); print o }';
-      return label + '\n' + mk + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + wf(ins['in']) + ' > ' + shq(dest.replace(/\\/g, '/'));
+      return label + '\n' + mk + 'awk -v US="$US" "$AWKLIB"\'\n' + prog + '\n\' ' + wf(ins['in']) + ' > ' + shellPath(dest.replace(/\\/g, '/'));
     }
     default:
       throw new Error("Unknown node type '" + t + "'.");
@@ -1478,28 +1546,29 @@ let nextId = 1;
 let selectedNode = null;
 let selectedEdge = null;
 let pendingFrom = null;  // node id with an armed output port
+let pipelineParams = [];  // [{ name, default }] declared pipeline parameters
 
 // --- Undo / redo ------------------------------------------------------------
 let undoStack = [], redoStack = [];
 function snapshotState() {
-  undoStack.push(JSON.stringify({ nodes, edges }));
+  undoStack.push(JSON.stringify({ nodes, edges, params: pipelineParams }));
   if (undoStack.length > 100) undoStack.shift();
   redoStack = [];
 }
 function restoreState(json) {
   const s = JSON.parse(json);
-  nodes = s.nodes; edges = s.edges;
+  nodes = s.nodes; edges = s.edges; pipelineParams = s.params || [];
   selection.clear(); selectedNode = null; selectedEdge = null; pendingFrom = null;
   renderAll(); renderProps();
 }
 function undo() {
   if (!undoStack.length) { setStatus('Nothing to undo.'); return; }
-  redoStack.push(JSON.stringify({ nodes, edges }));
+  redoStack.push(JSON.stringify({ nodes, edges, params: pipelineParams }));
   restoreState(undoStack.pop()); setStatus('Undo.');
 }
 function redo() {
   if (!redoStack.length) { setStatus('Nothing to redo.'); return; }
-  undoStack.push(JSON.stringify({ nodes, edges }));
+  undoStack.push(JSON.stringify({ nodes, edges, params: pipelineParams }));
   restoreState(redoStack.pop()); setStatus('Redo.');
 }
 
@@ -2143,6 +2212,38 @@ function renderPreviewPanel(node) {
   }
 }
 
+function renderParamsEditor(box) {
+  const h = document.createElement('div'); h.style.cssText = 'font-size:12px;color:var(--text);font-weight:600;margin-bottom:4px;'; h.textContent = 'Pipeline parameters'; box.appendChild(h);
+  addHint(box, 'Runtime overrides for paths. Reference one in an input/output path as ${Name}.');
+  const container = document.createElement('div');
+  function redraw() {
+    container.innerHTML = '';
+    pipelineParams.forEach((p, idx) => {
+      const row = document.createElement('div'); row.className = 'builder-row';
+      row.appendChild(txtEl(p.name, v => { p.name = v.replace(/[^A-Za-z0-9_]/g, ''); renderNodes(); }, 'Name'));
+      row.appendChild(txtEl(p.default, v => { p.default = v; }, 'Default'));
+      const rm = document.createElement('button'); rm.className = 'builder-rm'; rm.textContent = '×'; rm.title = 'remove';
+      rm.addEventListener('click', () => { snapshotState(); pipelineParams.splice(idx, 1); redraw(); });
+      row.appendChild(rm); container.appendChild(row);
+    });
+  }
+  redraw();
+  const add = document.createElement('button'); add.className = 'builder-add'; add.textContent = '+ parameter';
+  add.addEventListener('click', () => { snapshotState(); pipelineParams.push({ name: 'Param' + (pipelineParams.length + 1), default: '' }); redraw(); });
+  box.appendChild(container); box.appendChild(add);
+}
+function renderParamBind(box, node) {
+  const label = document.createElement('label'); label.textContent = 'Bind path to parameter'; box.appendChild(label);
+  const sel = document.createElement('select');
+  const none = document.createElement('option'); none.value = ''; none.textContent = '(literal path)'; sel.appendChild(none);
+  const m = /^\$\{([A-Za-z0-9_]+)\}$/.exec(node.config.path || '');
+  const bound = m ? m[1] : '';
+  pipelineParams.forEach(p => { const o = document.createElement('option'); o.value = p.name; o.textContent = '${' + p.name + '}'; if (p.name === bound) o.selected = true; sel.appendChild(o); });
+  sel.addEventListener('change', () => { snapshotState(); node.config.path = sel.value ? ('${' + sel.value + '}') : ''; renderProps(); renderNodes(); });
+  box.appendChild(sel);
+  addHint(box, 'Binding overrides the literal path with a parameter resolved at run time.');
+}
+
 function renderProps() {
   const box = document.getElementById('props-body');
   box.innerHTML = '';
@@ -2156,7 +2257,10 @@ function renderProps() {
   }
   const node = byId(selectedNode);
   if (!node) {
-    box.innerHTML = '<p class="hint">Select a node to edit it. Tip: drag a .csv / .tsv / .txt / .json file onto the canvas to create an input node.</p>';
+    renderParamsEditor(box);
+    const tip = document.createElement('p'); tip.className = 'hint';
+    tip.textContent = 'Select a node to edit it. Tip: drag a .csv / .tsv / .txt / .json file onto the canvas to create an input node.';
+    box.appendChild(tip);
     renderPreviewPanel(null);
     return;
   }
@@ -2226,6 +2330,7 @@ function renderProps() {
   }
 
   if (def.cat === 'input') renderSampleLoader(box, node);
+  if ((def.cat === 'input' || def.cat === 'output') && pipelineParams.length) renderParamBind(box, node);
   renderPreviewPanel(node);
 
   const del = document.createElement('button');
@@ -2249,6 +2354,7 @@ function toDefinition() {
     name: document.getElementById('pipeline-name').value || 'my-pipeline',
     description: '',
     version: 1,
+    parameters: pipelineParams,
     nodes: nodes.map(n => ({ id: n.id, type: n.type, label: n.label, position: { x: n.x, y: n.y }, config: n.config })),
     edges: edges.map(e => ({ from: e.from, to: e.to, toPort: e.toPort }))
   };
@@ -2263,6 +2369,7 @@ function loadDefinition(def) {
   edges = (def.edges || []).map(e => ({ from: e.from, to: e.to, toPort: e.toPort || 'in' }));
   nextId = nodes.length + 1;
   sampleData = {};   // loaded samples are tied to the previous graph's node ids
+  pipelineParams = (def.parameters || []).filter(p => p && p.name);
   selectedNode = null; selectedEdge = null; pendingFrom = null;
   renderAll(); renderProps();
 }
@@ -2319,6 +2426,13 @@ const BACKENDS = {
       if (/^'@/m.test(json)) {
         throw new Error("A value in the pipeline produces a line starting with '@, which would close the embedded here-string. Rename it and try again.");
       }
+      const params = (def.parameters || []).filter(p => p && p.name);
+      const paramLines = params.length
+        ? ['        [string]$BasePath,'].concat(params.map((p, i) =>
+            "        [string]$" + p.name + " = '" + String(p.default == null ? '' : p.default).replace(/'/g, "''") + "'" + (i < params.length - 1 ? ',' : '')))
+        : ['        [string]$BasePath'];
+      const paramAssign = ['    $Params = @{}'].concat(params.map(p =>
+        "    $Params['" + String(p.name).replace(/'/g, "''") + "'] = $" + p.name));
       return [
         '<#',
         '    ' + fn + ' - generated by PSPipeline Designer',
@@ -2333,7 +2447,7 @@ const BACKENDS = {
         '    [CmdletBinding()]',
         '    param(',
         '        # Optional: directory that relative input/output paths are resolved against.',
-        '        [string]$BasePath',
+        ...paramLines,
         '    )',
         '',
         engine,
@@ -2342,9 +2456,11 @@ const BACKENDS = {
         json,
         "'@",
         '',
+        ...paramAssign,
+        '',
         '    if ($BasePath) { Push-Location -Path $BasePath }',
         '    try {',
-        '        Invoke-PipelineDefinition -Definition ($pipelineJson | ConvertFrom-Json)',
+        '        Invoke-PipelineDefinition -Definition ($pipelineJson | ConvertFrom-Json) -Parameters $Params',
         '    }',
         '    finally {',
         '        if ($BasePath) { Pop-Location }',

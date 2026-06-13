@@ -9,6 +9,18 @@
     "name": { "type": "string" },
     "description": { "type": "string" },
     "version": { "type": "integer", "minimum": 1 },
+    "parameters": {
+      "type": "array",
+      "description": "Named runtime parameters; reference one in a node path as ${Name}.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+          "default": { "type": "string" }
+        }
+      }
+    },
     "nodes": {
       "type": "array",
       "items": {
