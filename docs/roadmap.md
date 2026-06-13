@@ -31,9 +31,15 @@ cheap in M and PowerShell but hard in POSIX awk; where that is true, the awk bac
 decline that node with a clear message rather than emit something subtly wrong. Track
 feasibility per node, per backend.
 
-## Planned: M / Power Query export (a gateway, not a competitor)
+## M / Power Query export (a gateway, not a competitor)
 
-Add an `mquery` backend that compiles a pipeline to Power Query **M code** the user can
+**Status: v1 shipped** -- the `mquery` backend (a Generate target in the designer, `tools/mquery.js`).
+It covers every node except fixed-width input. Columns export as text and aggregations coerce
+numbers internally; the user sets column types in Power Query as needed. As flagged below, this
+backend cannot be runtime-verified outside Excel/Power BI, so it is verified structurally here
+and validated by the user on paste.
+
+The `mquery` backend compiles a pipeline to Power Query **M code** the user can
 paste into Excel or Power BI.
 
 The insight: our target users can already get data into a CSV. What they lack is the

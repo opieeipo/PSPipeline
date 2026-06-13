@@ -45,13 +45,15 @@ $engine   = (Read-Utf8 (Join-Path $repoRoot 'src/PSPipeline/Core/PipelineFunctio
 $runtime  = (Read-Utf8 (Join-Path $repoRoot 'src/PSPipeline/Core/pipeline-runtime.sh')).TrimEnd()
 $shellgen  = (Read-Utf8 (Join-Path $repoRoot 'tools/shellgen.js')).TrimEnd()
 $samplerun = (Read-Utf8 (Join-Path $repoRoot 'tools/samplerun.js')).TrimEnd()
+$mquery    = (Read-Utf8 (Join-Path $repoRoot 'tools/mquery.js')).TrimEnd()
 
 $html = Read-Utf8 $designerPath
 $html = Set-EmbeddedBlock $html '<script type="text/plain" id="ps-engine-source">' '</script><!-- /ps-engine-source -->' $engine
 $html = Set-EmbeddedBlock $html '<script type="text/plain" id="sh-runtime-source">' '</script><!-- /sh-runtime-source -->' $runtime
 $html = Set-EmbeddedBlock $html '<script id="shellgen-source">' '</script><!-- /shellgen-source -->' $shellgen
 $html = Set-EmbeddedBlock $html '<script id="samplerun-source">' '</script><!-- /samplerun-source -->' $samplerun
+$html = Set-EmbeddedBlock $html '<script id="mquery-source">' '</script><!-- /mquery-source -->' $mquery
 
 # Write UTF-8 without a BOM so the HTML file stays clean across re-syncs.
 [System.IO.File]::WriteAllText($designerPath, $html, (New-Object System.Text.UTF8Encoding($false)))
-Write-Host "Synced engine + shell runtime + shell generator + preview executor into designer/index.html."
+Write-Host "Synced engine + shell runtime + shell generator + preview executor + M generator into designer/index.html."
