@@ -1,10 +1,10 @@
-# PSPipeline roadmap
+# PSPipeline build record
 
 PSPipeline reproduces a focused subset of Power Query / M (file-based ETL) in a form
 that runs in locked-down environments: no installs, no admin, no network, Constrained
-Language Mode safe, compiled to a single portable script. This document captures where
-it is and where it is going, and -- just as importantly -- what it will deliberately
-never do.
+Language Mode safe, compiled to a single portable script. This began as a roadmap; with
+the parity track delivered it is now mostly a record of what was built -- plus the few
+items still open, and what the project will deliberately never do.
 
 ## Status
 
@@ -28,15 +28,24 @@ Remaining (small, data-dependent tails of otherwise-finished items):
 - **Split-into-N-columns** -- column count is data-dependent (item 3).
 - **Rank** aggregation -- cross-engine tie-ordering parity is the fiddly bit (item 7).
 
-## Design rule for everything below
+## Design rule
 
 Every transform node must be implementable across the code-generation backends
-(PowerShell, POSIX `sh`+`awk`, and the planned M export) and the in-browser preview
+(PowerShell, POSIX `sh`+`awk`, and the M export) and the in-browser preview
 executor (`tools/samplerun.js`) -- or be explicitly marked target-specific. Adding a node
 is therefore N implementations, not one. Some transforms (pivot, window functions) are
 cheap in M and PowerShell but hard in POSIX awk; where that is true, the awk backend may
 decline that node with a clear message rather than emit something subtly wrong. Track
 feasibility per node, per backend.
+
+Two facts shaped the whole build and still hold:
+
+- **The M backend is a verification cliff.** M output cannot be runtime-verified in this
+  environment (no Excel / Power Query engine). PowerShell, awk, and preview get diffed against
+  the oracle; M can only be syntax-shaped until it is run in Excel/Power BI.
+- **Data-dependent columns** (split-into-N, pivot) are the recurring hard case: when output
+  columns depend on the data, static schema propagation and the column-aware dropdowns degrade,
+  and the backends must discover columns at run time (or, like awk with pivot, decline).
 
 ## M / Power Query export (a gateway, not a competitor)
 
@@ -85,11 +94,13 @@ Multi-input DAGs (joins, unions) map to multiple `let` queries. A bonus: emittin
 third-party validation of our pipeline semantics. The only node the M export does not
 cover is fixed-width input (`input.fixedwidth`), which it declines.
 
-## Planned: transform parity with Power Query (the "M-gaps")
+## Transform parity with Power Query -- delivered
 
-Ordered by value to the target persona (non-IT people doing extract/clean work in
-locked-down shops). None of these requires breaking the no-install / CLM-safe / portable
-constraints.
+The gaps between PSPipeline and Power Query that the build closed, listed in the order they
+were tackled (by value to the target persona: non-IT people doing extract/clean work in
+locked-down shops). None of these broke the no-install / CLM-safe / portable constraints.
+Three small data-dependent tails remain open; they are noted inline below and collected under
+Status at the top.
 
 1. **Union / append:** DONE -- the `transform.union` node stacks the rows of 2+ inputs
    (multiple edges into one port) and unions their columns in first-appearance order, with
@@ -132,56 +143,6 @@ constraints.
    env-overridable vars (`PSPL_InFile=... ./pipeline.sh`). The engine resolves the tokens at
    run time. (Tokens anywhere in config work in PowerShell; the shell target restricts them
    to paths.)
-
-### Level of effort and sequencing (retrospective)
-
-All nine items have since shipped, so the table below is kept as a record of the original
-estimate and how it landed. Two predictions were beaten: dates were expected to be PS + M
-only, but a self-implemented Julian Day Number made them byte-equal in awk too; and the
-type-cast layer folded into the date work rather than the aggregation work.
-
-LOE is driven less by transform logic (most is simple) than by a structural tax: each new
-node is implemented in **three engines** (PowerShell, awk via `shellgen.js`, and the
-`samplerun.js` preview) plus the designer node, schema, `outputColumns` propagation, and
-tests -- and **four** once the M backend exists. Sizes below are for a focused dev who knows
-this codebase, relative to the phases already shipped (S = a fraction of a session, M = about
-half to one session, L = one or more sessions).
-
-| # | Item | Size | Main cost / risk | awk feasibility |
-|---|------|------|------------------|-----------------|
-| 1 | Union / append (+ folder) | M-L | New **variable-arity input ports** in the designer (canvas/connection infra; ports are fixed today). Folder = multi-file read. | OK (header-union); folder = shell loop |
-| 2 | Conditional column | M | A **nested rules-builder UI** (conditions inside rules); logic reuses existing condition eval. | OK (reuse `condExpr`) |
-| 3 | Text functions | M-L (group) | Many small nodes; **split-into-N-columns** has a data-dependent column count. | OK |
-| 4 | Date/time + light type layer | L | **Cross-engine date-format parity is the hardest correctness problem in the track**; type layer is cross-cutting. | Predicted PS + M only; **actually all engines** via self-implemented JDN |
-| 5 | Pivot / unpivot | M (unpivot) + L (pivot) | Pivot output columns are **data-dependent** (runtime discovery). | unpivot all engines; pivot -> PS + M only (awk declines) |
-| 6 | Type cast + richer aggregations | M | median/percentile need in-group sort; mostly extends the aggregate node. | all engines (cast shipped with item 4) |
-| 7 | Row operations | M (a bag of S's) | Each is small/easy; volume is the cost. | OK |
-| 8 | Designer column profiling | S-M | Designer/preview only, **no backend codegen**. | n/a |
-| 9 | Pipeline-level parameters | M | Cross-cutting: every backend's wrapper + a designer binding UI. | moderate |
-
-Two things that change the math:
-
-- **The M backend is a verification cliff.** M output cannot be runtime-verified in this
-  environment (no Excel / Power Query engine). PowerShell, awk, and preview get diffed against
-  the oracle; M can only be syntax-shaped until it is run in Excel/Power BI. Do not couple
-  parity tightly to M before accepting that.
-- **Data-dependent columns** (split-into-N, pivot) are the recurring hard case: when output
-  columns depend on the data, static schema propagation and the downstream column-aware
-  dropdowns degrade, and the backends must discover columns at runtime.
-
-Suggested sequencing by value-to-effort:
-
-- **Quick wins first:** #8 profiling (designer-only), the trim/case/clean subset of #3, and
-  #7 row ops.
-- **High value, do the infra once:** #1 union/append (the variable-arity-port work unblocks
-  all future multi-input nodes), then #2 conditional column.
-- **Defer / treat as their own mini-projects:** #4 dates+types and #5 pivot; #9 parameters is
-  orthogonal and can land anytime.
-
-Rollup: the full track roughly doubles the node count across multiple backends, so in total
-it is on the order of everything built so far -- about **6-10 focused sessions** at current
-pace, but cleanly phaseable and front-loadable with the quick wins. The single highest-leverage
-first slice is **union/append plus the variable-arity port infrastructure**.
 
 ## Explicitly out of scope
 

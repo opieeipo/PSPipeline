@@ -162,7 +162,7 @@ PSPipeline/
 - [x] Pipeline-level parameters: declare named params and bind `${Name}` into input/output paths; override at run time via PowerShell function params or shell env vars
 - [ ] Parity tails still open: combine-a-folder-of-files, split-into-N-columns, rank aggregation
 
-See **[docs/roadmap.md](docs/roadmap.md)** for the full roadmap, the M-export plan, the per-backend feasibility rule, and the explicit non-goals (DAX / interactive modeling stay out of scope).
+See **[docs/roadmap.md](docs/roadmap.md)** for the build record: what was delivered across the engines, the M-export design, the per-backend feasibility rule, the few items still open, and the explicit non-goals (DAX / interactive modeling stay out of scope).
 
 ## Running the tests (optional)
 
