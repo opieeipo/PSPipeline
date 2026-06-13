@@ -89,14 +89,35 @@
   #props .preview th, #props .preview td { border: 1px solid var(--line); padding: 2px 4px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #props .preview th { color: var(--accent); }
 
-  #preview-panel { flex: 0 0 auto; height: 200px; overflow: auto; background: var(--panel); border-top: 1px solid var(--line); padding: 8px 12px; }
+  #preview-panel { flex: 0 0 auto; background: var(--panel); border-top: 1px solid var(--line); display: flex; flex-direction: column; }
+  #preview-header { padding: 5px 12px; cursor: pointer; font-size: 12px; color: var(--text); user-select: none; }
+  #preview-panel:not(.collapsed) #preview-header { border-bottom: 1px solid var(--line); }
+  #preview-toggle { color: var(--accent); display: inline-block; width: 12px; }
+  #preview-body { height: 200px; overflow: auto; padding: 8px 12px; }
+  #preview-panel.collapsed #preview-body { display: none; }
   #preview-panel .preview-head { font-size: 12px; color: var(--text); margin-bottom: 6px; }
-  #preview-panel .preview-head strong { color: var(--accent); }
   #preview-panel .preview-cols { color: var(--muted); }
   #preview-panel table { border-collapse: collapse; font-size: 11px; }
   #preview-panel th, #preview-panel td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
   #preview-panel th { color: var(--accent); position: sticky; top: 0; background: var(--panel); }
   #preview-panel .preview-empty, #preview-panel .preview-note { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+  .palette-item { display: flex; align-items: center; gap: 8px; }
+  .pi-icon { flex: 0 0 auto; width: 18px; text-align: center; font-size: 15px; }
+  #palette .pal-head { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+  #btn-palette-toggle { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; }
+  #palette.compact { width: 52px; padding: 8px 4px; }
+  #palette.compact h2 { display: none; }
+  #palette.compact .pi-label { display: none; }
+  #palette.compact .palette-item { justify-content: center; padding: 8px 0; }
+  #palette.compact .pal-head { justify-content: center; }
+  .node .head { display: flex; align-items: center; gap: 6px; cursor: move; }
+  .node .head .nh-icon { flex: 0 0 auto; font-size: 13px; }
+  .node .body { cursor: move; }
+  #toolbar .tb-zoom { display: flex; align-items: center; gap: 4px; }
+  #toolbar .tb-zoom button { padding: 4px 9px; }
+  #toolbar #zoom-label { font-size: 11px; color: var(--muted); min-width: 40px; text-align: center; }
+  .marquee { position: absolute; z-index: 5; border: 1px solid var(--accent); background: rgba(79,156,249,.12); pointer-events: none; }
 
   #status { padding: 4px 12px; font-size: 11px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
 </style>
@@ -109,6 +130,12 @@
   <button id="btn-new">New</button>
   <button id="btn-open">Open JSON</button>
   <button id="btn-save">Save JSON</button>
+  <span class="tb-zoom">
+    <button id="btn-zoom-out" title="Zoom out">-</button>
+    <span id="zoom-label">100%</span>
+    <button id="btn-zoom-in" title="Zoom in">+</button>
+    <button id="btn-zoom-fit" title="Fit to view">Fit</button>
+  </span>
   <div class="spacer"></div>
   <select id="gen-target" title="Output target"></select>
   <button id="btn-generate">⚡ Generate</button>
@@ -125,7 +152,10 @@
   <div id="props"><h2>Properties</h2><div id="props-body"><p class="hint">Select a node to edit it. Tip: drag a .csv / .tsv / .txt / .json file onto the canvas to create an input node.</p></div></div>
 </div>
 
-<div id="preview-panel"><div class="preview-empty">Select a node to preview its columns and sample data.</div></div>
+<div id="preview-panel" class="collapsed">
+  <div id="preview-header"><span id="preview-toggle">▸</span> <span id="preview-title">Preview</span></div>
+  <div id="preview-body"></div>
+</div>
 
 <div id="status">Ready — drag nodes from the palette, click an output port then an input port to connect.</div>
 
@@ -1370,7 +1400,7 @@ function snapshotState() {
 function restoreState(json) {
   const s = JSON.parse(json);
   nodes = s.nodes; edges = s.edges;
-  selectedNode = null; selectedEdge = null; pendingFrom = null;
+  selection.clear(); selectedNode = null; selectedEdge = null; pendingFrom = null;
   renderAll(); renderProps();
 }
 function undo() {
@@ -1392,9 +1422,90 @@ function setStatus(msg) { statusBar.textContent = msg; }
 function nodeType(n) { return NODE_TYPES[n.type]; }
 function byId(id) { return nodes.find(n => n.id === id); }
 
+// --- Multi-selection --------------------------------------------------------
+// `selection` is the source of truth for highlighting / move / delete;
+// `selectedNode` mirrors it as the single id shown in the properties panel.
+let selection = new Set();
+function syncPrimary() { selectedNode = (selection.size === 1) ? [...selection][0] : null; }
+function setSelection(ids) { selection = new Set(ids); selectedEdge = null; syncPrimary(); renderNodes(); renderProps(); }
+function addToSelection(id) { if (selection.has(id)) selection.delete(id); else selection.add(id); selectedEdge = null; syncPrimary(); renderNodes(); renderProps(); }
+function deleteSelected() {
+  if (!selection.size) return;
+  snapshotState();
+  const ids = new Set(selection);
+  nodes = nodes.filter(n => !ids.has(n.id));
+  edges = edges.filter(e => !ids.has(e.from) && !ids.has(e.to));
+  ids.forEach(id => { delete sampleData[id]; });
+  selection.clear(); selectedNode = null;
+  renderAll(); renderProps();
+}
+function handleNodeMouseDown(node, ev) {
+  if (ev.shiftKey || ev.ctrlKey || ev.metaKey) { addToSelection(node.id); return; }
+  if (!selection.has(node.id)) setSelection([node.id]);
+  beginDrag(ev);
+}
+
+// --- Zoom / fit -------------------------------------------------------------
+const canvasWrap = document.getElementById('canvas-wrap');
+let zoom = 1;
+function nodeHeight() { return 70; }   // approximate, for hit-testing and fit
+function applyZoom() {
+  canvas.style.transformOrigin = '0 0';
+  canvas.style.transform = 'scale(' + zoom + ')';
+  const zl = document.getElementById('zoom-label'); if (zl) zl.textContent = Math.round(zoom * 100) + '%';
+}
+function zoomBy(f) { zoom = Math.min(2, Math.max(0.25, zoom * f)); applyZoom(); }
+function fitToView() {
+  if (!nodes.length) { zoom = 1; applyZoom(); canvasWrap.scrollLeft = 0; canvasWrap.scrollTop = 0; return; }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  nodes.forEach(n => { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + 168); maxY = Math.max(maxY, n.y + nodeHeight()); });
+  const pad = 40;
+  const cw = canvasWrap.clientWidth - pad * 2, ch = canvasWrap.clientHeight - pad * 2;
+  zoom = Math.min(2, Math.max(0.25, Math.min(cw / (maxX - minX), ch / (maxY - minY), 1)));
+  applyZoom();
+  canvasWrap.scrollLeft = Math.max(0, minX * zoom - pad);
+  canvasWrap.scrollTop = Math.max(0, minY * zoom - pad);
+}
+function toCanvas(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (clientX - r.left) / zoom, y: (clientY - r.top) / zoom };
+}
+
+// --- Node icons -------------------------------------------------------------
+const NODE_ICONS = {
+  'input.csv': '📄', 'input.fixedwidth': '📐', 'input.json': '🗂️',
+  'transform.select': '🎯', 'transform.drop': '🗑️', 'transform.rename': '🏷️', 'transform.derive': '✨',
+  'transform.filter': '🔍', 'transform.sort': '↕️', 'transform.distinct': '💠', 'transform.join': '🔗',
+  'transform.aggregate': '📊', 'transform.limit': '🔝', 'transform.index': '#️⃣', 'transform.replace': '🔁',
+  'transform.fill': '🪣', 'transform.conditional': '🔀',
+  'output.csv': '💾', 'output.json': '📦'
+};
+function iconFor(type) { return NODE_ICONS[type] || '•'; }
+
+// --- Preview collapse / palette compact -------------------------------------
+let previewCollapsed = true;   // off by default
+let previewNode = null;
+function togglePreview() {
+  previewCollapsed = !previewCollapsed;
+  document.getElementById('preview-panel').classList.toggle('collapsed', previewCollapsed);
+  document.getElementById('preview-toggle').textContent = previewCollapsed ? '▸' : '▾';
+  if (!previewCollapsed) renderPreviewPanel(previewNode);
+}
+let paletteCompact = false;
+function togglePalette() {
+  paletteCompact = !paletteCompact;
+  document.getElementById('palette').classList.toggle('compact', paletteCompact);
+  const b = document.getElementById('btn-palette-toggle'); if (b) b.textContent = paletteCompact ? '»' : '« Collapse';
+}
+
 // --- Palette ---------------------------------------------------------------
 (function buildPalette() {
   const palette = document.getElementById('palette');
+  const palHead = document.createElement('div'); palHead.className = 'pal-head';
+  const toggle = document.createElement('button'); toggle.id = 'btn-palette-toggle';
+  toggle.textContent = '« Collapse'; toggle.title = 'Toggle compact / expanded palette';
+  toggle.addEventListener('click', togglePalette);
+  palHead.appendChild(toggle); palette.appendChild(palHead);
   const groups = { input: 'Inputs', transform: 'Transforms', output: 'Outputs' };
   for (const [cat, title] of Object.entries(groups)) {
     const h = document.createElement('h2');
@@ -1404,7 +1515,10 @@ function byId(id) { return nodes.find(n => n.id === id); }
       if (def.cat !== cat) continue;
       const item = document.createElement('div');
       item.className = 'palette-item cat-' + cat;
-      item.textContent = def.name;
+      item.title = def.name;
+      const ic = document.createElement('span'); ic.className = 'pi-icon'; ic.textContent = iconFor(type);
+      const lb = document.createElement('span'); lb.className = 'pi-label'; lb.textContent = def.name;
+      item.appendChild(ic); item.appendChild(lb);
       item.draggable = true;
       item.addEventListener('dragstart', e => e.dataTransfer.setData('node-type', type));
       item.addEventListener('click', () => addNode(type, 80 + nodes.length * 16, 80 + nodes.length * 16));
@@ -1417,8 +1531,8 @@ function byId(id) { return nodes.find(n => n.id === id); }
 canvas.parentElement.addEventListener('dragover', e => e.preventDefault());
 canvas.parentElement.addEventListener('drop', e => {
   e.preventDefault();
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const p = toCanvas(e.clientX, e.clientY);
+  const x = p.x, y = p.y;
   const type = e.dataTransfer.getData('node-type');
   if (type) { addNode(type, x, y); return; }
   // Dropping a real file creates a matching input node. Browsers only expose
@@ -1453,7 +1567,7 @@ function deleteNode(id) {
   snapshotState();
   nodes = nodes.filter(n => n.id !== id);
   edges = edges.filter(e => e.from !== id && e.to !== id);
-  if (selectedNode === id) selectedNode = null;
+  selection.delete(id); if (selectedNode === id) selectedNode = null;
   renderAll(); renderProps();
 }
 
@@ -1465,14 +1579,16 @@ function renderNodes() {
   for (const node of nodes) {
     const def = nodeType(node);
     const el = document.createElement('div');
-    el.className = 'node cat-' + def.cat + (node.id === selectedNode ? ' selected' : '');
+    el.className = 'node cat-' + def.cat + (selection.has(node.id) ? ' selected' : '');
     el.style.left = node.x + 'px';
     el.style.top = node.y + 'px';
     el.dataset.id = node.id;
 
     const head = document.createElement('div');
     head.className = 'head';
-    head.textContent = node.label;
+    const hIcon = document.createElement('span'); hIcon.className = 'nh-icon'; hIcon.textContent = iconFor(node.type);
+    const hText = document.createElement('span'); hText.textContent = node.label;
+    head.appendChild(hIcon); head.appendChild(hText);
     el.appendChild(head);
 
     const body = document.createElement('div');
@@ -1510,8 +1626,7 @@ function renderNodes() {
       p.addEventListener('click', ev => { ev.stopPropagation(); startEdge(node.id); });
     }
 
-    head.addEventListener('mousedown', ev => beginDrag(node, ev));
-    el.addEventListener('mousedown', () => selectNode(node.id));
+    el.addEventListener('mousedown', ev => handleNodeMouseDown(node, ev));
     canvas.appendChild(el);
   }
 }
@@ -1553,7 +1668,7 @@ function renderEdges() {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`);
     if (i === selectedEdge) path.classList.add('selected');
-    path.addEventListener('click', ev => { ev.stopPropagation(); selectedEdge = i; selectedNode = null; renderAll(); renderProps(); });
+    path.addEventListener('click', ev => { ev.stopPropagation(); selectedEdge = i; selection.clear(); selectedNode = null; renderAll(); renderProps(); });
     edgesSvg.appendChild(path);
   });
 }
@@ -1577,16 +1692,22 @@ function finishEdge(toId, toPort) {
 }
 
 // --- Node dragging --------------------------------------------------------------
-function beginDrag(node, ev) {
+function beginDrag(ev) {
   ev.preventDefault();
-  const startX = ev.clientX, startY = ev.clientY, origX = node.x, origY = node.y;
+  const startX = ev.clientX, startY = ev.clientY;
+  const moving = [...selection].map(byId).filter(Boolean);
+  if (!moving.length) return;
+  const orig = new Map(moving.map(n => [n.id, { x: n.x, y: n.y }]));
   let moved = false;
   function move(e) {
     if (!moved) { snapshotState(); moved = true; }
-    node.x = Math.max(0, origX + e.clientX - startX);
-    node.y = Math.max(0, origY + e.clientY - startY);
-    const el = canvas.querySelector('.node[data-id="' + node.id + '"]');
-    el.style.left = node.x + 'px'; el.style.top = node.y + 'px';
+    const dx = (e.clientX - startX) / zoom, dy = (e.clientY - startY) / zoom;
+    moving.forEach(n => {
+      const o = orig.get(n.id);
+      n.x = Math.max(0, o.x + dx); n.y = Math.max(0, o.y + dy);
+      const el = canvas.querySelector('.node[data-id="' + n.id + '"]');
+      if (el) { el.style.left = n.x + 'px'; el.style.top = n.y + 'px'; }
+    });
     renderEdges();
   }
   function up() { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); }
@@ -1595,10 +1716,34 @@ function beginDrag(node, ev) {
 }
 
 // --- Selection / properties panel ---------------------------------------------
-function selectNode(id) { selectedNode = id; selectedEdge = null; renderNodes(); renderProps(); }
+function selectNode(id) { setSelection([id]); }
 
 canvas.addEventListener('mousedown', e => {
-  if (e.target === canvas || e.target === edgesSvg) { selectedNode = null; selectedEdge = null; pendingFrom = null; renderAll(); renderProps(); }
+  if (e.target !== canvas && e.target !== edgesSvg) return;   // empty-canvas only
+  pendingFrom = null;
+  const start = toCanvas(e.clientX, e.clientY);
+  const box = document.createElement('div'); box.className = 'marquee'; canvas.appendChild(box);
+  let dragged = false;
+  function rect(ev) {
+    const cur = toCanvas(ev.clientX, ev.clientY);
+    return { x1: Math.min(start.x, cur.x), y1: Math.min(start.y, cur.y), x2: Math.max(start.x, cur.x), y2: Math.max(start.y, cur.y) };
+  }
+  function mm(ev) {
+    dragged = true;
+    const r = rect(ev);
+    box.style.left = r.x1 + 'px'; box.style.top = r.y1 + 'px';
+    box.style.width = (r.x2 - r.x1) + 'px'; box.style.height = (r.y2 - r.y1) + 'px';
+  }
+  function mu(ev) {
+    document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu);
+    box.remove();
+    if (!dragged) { setSelection([]); return; }   // plain click on empty canvas clears selection
+    const r = rect(ev);
+    const hit = nodes.filter(n => n.x < r.x2 && n.x + 168 > r.x1 && n.y < r.y2 && n.y + nodeHeight() > r.y1).map(n => n.id);
+    const base = (ev.shiftKey || ev.ctrlKey || ev.metaKey) ? [...selection] : [];
+    setSelection([...new Set([...base, ...hit])]);
+  }
+  document.addEventListener('mousemove', mm); document.addEventListener('mouseup', mu);
 });
 
 document.addEventListener('keydown', e => {
@@ -1615,7 +1760,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
   if (inField) return;
   if (selectedEdge !== null) { snapshotState(); edges.splice(selectedEdge, 1); selectedEdge = null; renderAll(); }
-  else if (selectedNode) deleteNode(selectedNode);
+  else if (selection.size) deleteSelected();
 });
 
 // --- Schema awareness: sample data + column propagation ---------------------
@@ -1858,14 +2003,17 @@ function renderSampleLoader(box, node) {
   addHint(box, 'Preview only, never saved. Seeds the runtime path above if it is empty.');
 }
 function renderPreviewPanel(node) {
-  const panel = document.getElementById('preview-panel');
-  panel.innerHTML = '';
+  previewNode = node;
+  const titleEl = document.getElementById('preview-title');
+  if (titleEl) titleEl.textContent = node ? ('Preview: ' + (node.label || nodeType(node).name)) : 'Preview';
+  if (previewCollapsed) return;   // off by default; do not compute while hidden
+  const body = document.getElementById('preview-body');
+  body.innerHTML = '';
   if (!node) {
     const e = document.createElement('div'); e.className = 'preview-empty';
     e.textContent = 'Select a node to preview its columns and sample data.';
-    panel.appendChild(e); return;
+    body.appendChild(e); return;
   }
-  const def = nodeType(node);
 
   // Live preview: run the loaded sample rows through the DAG to this node.
   let exec = null;
@@ -1874,11 +2022,10 @@ function renderPreviewPanel(node) {
   const rows = (exec && exec.rows) ? exec.rows : [];
 
   const head = document.createElement('div'); head.className = 'preview-head';
-  const title = document.createElement('strong'); title.textContent = node.label || def.name; head.appendChild(title);
   const colsSpan = document.createElement('span'); colsSpan.className = 'preview-cols';
-  colsSpan.textContent = '   ' + (cols.length ? ('Columns: ' + cols.join(', ')) : 'Columns unknown; load a sample on the input node(s) or set fixed-width columns.');
+  colsSpan.textContent = cols.length ? ('Columns: ' + cols.join(', ')) : 'Columns unknown; load a sample on the input node(s) or set fixed-width columns.';
   head.appendChild(colsSpan);
-  panel.appendChild(head);
+  body.appendChild(head);
 
   if (rows.length && cols.length) {
     const tbl = document.createElement('table');
@@ -1890,21 +2037,29 @@ function renderPreviewPanel(node) {
       cols.forEach((h, i) => { const v = (r[i] == null ? '' : r[i]); const td = document.createElement('td'); td.textContent = v; td.title = v; tr.appendChild(td); });
       tbl.appendChild(tr);
     });
-    panel.appendChild(tbl);
+    body.appendChild(tbl);
     const note = document.createElement('div'); note.className = 'preview-note';
     note.textContent = 'Showing ' + Math.min(15, rows.length) + ' of ' + rows.length + ' preview rows, computed in-browser from the loaded sample.';
-    panel.appendChild(note);
-    renderProfile(panel, cols, rows);
+    body.appendChild(note);
+    renderProfile(body, cols, rows);
   } else {
     const note = document.createElement('div'); note.className = 'preview-note';
     note.textContent = 'No preview rows yet. Load a sample file on the input node(s) and the data flows through to here.';
-    panel.appendChild(note);
+    body.appendChild(note);
   }
 }
 
 function renderProps() {
   const box = document.getElementById('props-body');
   box.innerHTML = '';
+  if (selection.size > 1) {
+    const p = document.createElement('p'); p.className = 'hint'; p.textContent = selection.size + ' nodes selected. Drag to move them together.';
+    box.appendChild(p);
+    const del = document.createElement('button'); del.className = 'danger'; del.textContent = 'Delete ' + selection.size + ' nodes';
+    del.addEventListener('click', deleteSelected); box.appendChild(del);
+    renderPreviewPanel(null);
+    return;
+  }
   const node = byId(selectedNode);
   if (!node) {
     box.innerHTML = '<p class="hint">Select a node to edit it. Tip: drag a .csv / .tsv / .txt / .json file onto the canvas to create an input node.</p>';
@@ -2169,6 +2324,11 @@ document.getElementById('modal-copy').addEventListener('click', () =>
   navigator.clipboard.writeText(generated.text).then(() => setStatus('Copied to clipboard.')));
 document.getElementById('modal-download').addEventListener('click', () => download(generated.filename, generated.text));
 
+document.getElementById('btn-zoom-in').addEventListener('click', () => zoomBy(1.2));
+document.getElementById('btn-zoom-out').addEventListener('click', () => zoomBy(1 / 1.2));
+document.getElementById('btn-zoom-fit').addEventListener('click', fitToView);
+document.getElementById('preview-header').addEventListener('click', togglePreview);
+applyZoom();
 renderAll();
 </script>
 </body>
