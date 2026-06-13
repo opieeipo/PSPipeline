@@ -64,6 +64,7 @@
   #props h2 { font-size: 12px; margin: 0 0 10px; }
   #props label { display: block; font-size: 11px; color: var(--muted); margin: 10px 0 3px; }
   #props input, #props select, #props textarea { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 5px 7px; border-radius: 4px; font: inherit; }
+  #props input.readonly { color: var(--muted); background: #20242b; cursor: default; }
   #props textarea { min-height: 84px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
   #props .hint { font-size: 10px; color: var(--muted); margin-top: 2px; }
   #props button.danger { margin-top: 14px; width: 100%; background: none; border: 1px solid #b05050; color: #d98080; padding: 6px; border-radius: 4px; cursor: pointer; }
@@ -1078,18 +1079,18 @@ if (typeof module !== 'undefined' && module.exports) {
 // ---------------------------------------------------------------------------
 const NODE_TYPES = {
   'input.csv':  { name: 'Delimited Text', cat: 'input', inputs: [], fields: [
-    { key: 'path', label: 'File path (runtime, on target machine)', type: 'text', placeholder: 'data\\input.csv' },
+    { key: 'path', label: 'File (set by the picker below)', type: 'text', readonly: true, placeholder: 'data\\input.csv' },
     { key: 'delimiter', label: 'Delimiter', type: 'select', default: ',', options: [
       { label: 'Comma  ,', value: ',' }, { label: 'Tab', value: '\t' },
       { label: 'Pipe  |', value: '|' }, { label: 'Semicolon  ;', value: ';' } ] } ] },
   'input.fixedwidth': { name: 'Fixed-Width Text', cat: 'input', inputs: [], fields: [
-    { key: 'path', label: 'File path (runtime, on target machine)', type: 'text', placeholder: 'data\\extract.txt' },
+    { key: 'path', label: 'File (set by the picker below)', type: 'text', readonly: true, placeholder: 'data\\extract.txt' },
     { key: 'columns', label: 'Columns (JSON)', type: 'json',
       placeholder: '[\n  { "name": "Id", "start": 1, "length": 5 },\n  { "name": "Name", "start": 6, "length": 20 }\n]',
       hint: 'start = 1-based character position; length = characters. Values are trimmed.' },
     { key: 'skipLines', label: 'Header lines to skip (optional)', type: 'text' } ] },
   'input.json': { name: 'JSON File', cat: 'input', inputs: [], fields: [
-    { key: 'path', label: 'File path (runtime, on target machine)', type: 'text' } ] },
+    { key: 'path', label: 'File (set by the picker below)', type: 'text', readonly: true } ] },
 
   'transform.select': { name: 'Select Columns', cat: 'transform', inputs: ['in'], fields: [
     { key: 'columns', label: 'Columns to keep', type: 'columns' } ] },
@@ -1134,6 +1135,30 @@ let nextId = 1;
 let selectedNode = null;
 let selectedEdge = null;
 let pendingFrom = null;  // node id with an armed output port
+
+// --- Undo / redo ------------------------------------------------------------
+let undoStack = [], redoStack = [];
+function snapshotState() {
+  undoStack.push(JSON.stringify({ nodes, edges }));
+  if (undoStack.length > 100) undoStack.shift();
+  redoStack = [];
+}
+function restoreState(json) {
+  const s = JSON.parse(json);
+  nodes = s.nodes; edges = s.edges;
+  selectedNode = null; selectedEdge = null; pendingFrom = null;
+  renderAll(); renderProps();
+}
+function undo() {
+  if (!undoStack.length) { setStatus('Nothing to undo.'); return; }
+  redoStack.push(JSON.stringify({ nodes, edges }));
+  restoreState(undoStack.pop()); setStatus('Undo.');
+}
+function redo() {
+  if (!redoStack.length) { setStatus('Nothing to redo.'); return; }
+  undoStack.push(JSON.stringify({ nodes, edges }));
+  restoreState(redoStack.pop()); setStatus('Redo.');
+}
 
 const canvas = document.getElementById('canvas');
 const edgesSvg = document.getElementById('edges');
@@ -1190,6 +1215,7 @@ canvas.parentElement.addEventListener('drop', e => {
 
 // --- Node CRUD ---------------------------------------------------------------
 function addNode(type, x, y) {
+  snapshotState();
   const def = NODE_TYPES[type];
   const node = { id: 'n' + (nextId++), type, label: def.name, x: Math.max(0, x), y: Math.max(0, y), config: {} };
   if (type === 'transform.join') node.config.joinType = 'Inner';
@@ -1200,6 +1226,7 @@ function addNode(type, x, y) {
 }
 
 function deleteNode(id) {
+  snapshotState();
   nodes = nodes.filter(n => n.id !== id);
   edges = edges.filter(e => e.from !== id && e.to !== id);
   if (selectedNode === id) selectedNode = null;
@@ -1317,6 +1344,7 @@ function startEdge(fromId) {
 function finishEdge(toId, toPort) {
   if (!pendingFrom) { setStatus('Click an output port first, then an input port.'); return; }
   if (pendingFrom === toId) { setStatus('Cannot connect a node to itself.'); return; }
+  snapshotState();
   edges = edges.filter(e => !(e.to === toId && e.toPort === toPort)); // one edge per input port
   edges.push({ from: pendingFrom, to: toId, toPort });
   pendingFrom = null;
@@ -1328,7 +1356,9 @@ function finishEdge(toId, toPort) {
 function beginDrag(node, ev) {
   ev.preventDefault();
   const startX = ev.clientX, startY = ev.clientY, origX = node.x, origY = node.y;
+  let moved = false;
   function move(e) {
+    if (!moved) { snapshotState(); moved = true; }
     node.x = Math.max(0, origX + e.clientX - startX);
     node.y = Math.max(0, origY + e.clientY - startY);
     const el = canvas.querySelector('.node[data-id="' + node.id + '"]');
@@ -1348,17 +1378,27 @@ canvas.addEventListener('mousedown', e => {
 });
 
 document.addEventListener('keydown', e => {
+  const inField = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  const key = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) {
+    if (inField) return;            // let the browser undo text edits in a focused field
+    e.preventDefault(); undo(); return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) {
+    if (inField) return;
+    e.preventDefault(); redo(); return;
+  }
   if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-  if (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
-  if (selectedEdge !== null) { edges.splice(selectedEdge, 1); selectedEdge = null; renderAll(); }
+  if (inField) return;
+  if (selectedEdge !== null) { snapshotState(); edges.splice(selectedEdge, 1); selectedEdge = null; renderAll(); }
   else if (selectedNode) deleteNode(selectedNode);
 });
 
 // --- Schema awareness: sample data + column propagation ---------------------
 // Real sample rows live only at input nodes (loaded via the File API, never
 // saved into the pipeline JSON). Column names propagate through the whole DAG
-// by computation -- no data is executed downstream, so there is no third engine
-// to keep in sync with the PowerShell and shell backends.
+// by computation here. Row-level preview is computed separately by the embedded
+// preview executor (samplerun.js), verified against the PowerShell output.
 let sampleData = {};   // nodeId -> { columns: [], rows: [[]] }
 
 function edgeInto(id, port) {
@@ -1430,12 +1470,12 @@ function addHint(box, text) { const h = document.createElement('div'); h.classNa
 function selEl(options, current, onChange) {
   const s = document.createElement('select');
   options.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; if (o === current) op.selected = true; s.appendChild(op); });
-  s.addEventListener('change', () => onChange(s.value));
+  s.addEventListener('change', () => { snapshotState(); onChange(s.value); });
   return s;
 }
 function txtEl(value, onChange, ph) {
   const i = document.createElement('input'); i.type = 'text'; i.value = value || ''; if (ph) i.placeholder = ph;
-  i.addEventListener('change', () => onChange(i.value));
+  i.addEventListener('change', () => { snapshotState(); onChange(i.value); });
   return i;
 }
 function colInput(value, columns, onChange) {
@@ -1445,7 +1485,7 @@ function colInput(value, columns, onChange) {
     let found = false;
     columns.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; if (c === value) { o.selected = true; found = true; } s.appendChild(o); });
     if (value && !found) { const o = document.createElement('option'); o.value = value; o.textContent = value + ' (not in input)'; o.selected = true; s.appendChild(o); }
-    s.addEventListener('change', () => onChange(s.value));
+    s.addEventListener('change', () => { snapshotState(); onChange(s.value); });
     return s;
   }
   return txtEl(value, onChange, 'column name');
@@ -1462,6 +1502,7 @@ function renderColumns(box, node, field, columns) {
       const row = document.createElement('label'); row.className = 'chkrow';
       const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = cur.indexOf(c) >= 0;
       cb.addEventListener('change', () => {
+        snapshotState();
         let arr = (node.config[field.key] || []).slice();
         if (cb.checked) { if (arr.indexOf(c) < 0) arr.push(c); } else arr = arr.filter(x => x !== c);
         node.config[field.key] = arr; renderNodes();
@@ -1488,13 +1529,13 @@ function builderScaffold(box, node, field, columns, makeRow, makeNew) {
       const row = document.createElement('div'); row.className = 'builder-row';
       makeRow(row, item, columns);
       const rm = document.createElement('button'); rm.className = 'builder-rm'; rm.textContent = '×'; rm.title = 'remove';
-      rm.addEventListener('click', () => { node.config[field.key].splice(idx, 1); redraw(); renderNodes(); });
+      rm.addEventListener('click', () => { snapshotState(); node.config[field.key].splice(idx, 1); redraw(); renderNodes(); });
       row.appendChild(rm); container.appendChild(row);
     });
   }
   redraw();
   const add = document.createElement('button'); add.className = 'builder-add'; add.textContent = field.addLabel || '+ add';
-  add.addEventListener('click', () => { node.config[field.key].push(makeNew(columns)); redraw(); renderNodes(); });
+  add.addEventListener('click', () => { snapshotState(); node.config[field.key].push(makeNew(columns)); redraw(); renderNodes(); });
   box.appendChild(container); box.appendChild(add);
   if (field.hint) addHint(box, field.hint);
 }
@@ -1542,7 +1583,7 @@ function renderSampleLoader(box, node) {
         else if (node.type === 'input.fixedwidth') parsed = parseFixedSample(text, node.config.columns || [], parseInt(node.config.skipLines || 0, 10));
         else parsed = parseJsonSample(text);
         sampleData[node.id] = parsed;
-        if (!node.config.path) node.config.path = file.name;   // seed the runtime path from the picked file
+        node.config.path = file.name;   // the read-only path field mirrors the picked file
         setStatus('Loaded ' + parsed.rows.length + ' sample rows, ' + parsed.columns.length + ' columns from ' + file.name + '.');
         renderProps(); renderNodes();
       } catch (err) { setStatus('Could not parse sample: ' + err.message); }
@@ -1643,7 +1684,7 @@ function renderProps() {
       }
       // Persist the default so a never-touched select still serializes its value.
       if (current == null && field.default != null) node.config[field.key] = field.default;
-      sel.addEventListener('change', () => { node.config[field.key] = sel.value; renderNodes(); });
+      sel.addEventListener('change', () => { snapshotState(); node.config[field.key] = sel.value; renderNodes(); });
       box.appendChild(sel);
     } else if (field.type === 'json') {
       const label = document.createElement('label'); label.textContent = field.label; box.appendChild(label);
@@ -1652,6 +1693,7 @@ function renderProps() {
       ta.placeholder = field.placeholder || '';
       ta.addEventListener('change', () => {
         try {
+          snapshotState();
           node.config[field.key] = ta.value.trim() ? JSON.parse(ta.value) : undefined;
           ta.style.borderColor = ''; renderNodes(); setStatus('Updated.');
         } catch (err) { ta.style.borderColor = '#b05050'; setStatus('Invalid JSON: ' + err.message); }
@@ -1659,7 +1701,7 @@ function renderProps() {
       box.appendChild(ta);
       if (field.hint) addHint(box, field.hint);
     } else {
-      addField(box, field.label, 'text', current || '', v => { node.config[field.key] = v; renderNodes(); }, field.placeholder);
+      addField(box, field.label, 'text', current || '', v => { node.config[field.key] = v; renderNodes(); }, field.placeholder, field.readonly);
       if (field.hint) addHint(box, field.hint);
     }
   }
@@ -1673,11 +1715,12 @@ function renderProps() {
   box.appendChild(del);
 }
 
-function addField(box, labelText, type, value, onChange, placeholder) {
+function addField(box, labelText, type, value, onChange, placeholder, readonly) {
   const label = document.createElement('label'); label.textContent = labelText; box.appendChild(label);
   const input = document.createElement('input');
   input.type = type; input.value = value; if (placeholder) input.placeholder = placeholder;
-  input.addEventListener('change', () => onChange(input.value));
+  if (readonly) { input.readOnly = true; input.classList.add('readonly'); }
+  input.addEventListener('change', () => { snapshotState(); onChange(input.value); });
   box.appendChild(input);
 }
 
