@@ -68,9 +68,9 @@ constraints.
 
 1. **Union / append**, including combine-all-files-in-a-folder. The single most common
    real task ("merge the 12 monthly extracts"). Highest value.
-2. **Conditional column (if/then/else).** The biggest expressiveness gap today, since
-   `derive` is only a string template. Implement as a structured ordered-rules node
-   (condition -> value), not arbitrary code, to stay CLM-safe.
+2. **Conditional column (if/then/else).** DONE -- the `transform.conditional` node: a
+   structured ordered-rules node (first matching `condition -> value` wins, with an
+   `else`; results support `{Column}` templates), CLM-safe with no code eval.
 3. **Text functions:** split (by delimiter/position), extract (before/after/between),
    trim/clean, change case, merge columns.
 4. **Date/time functions** + a light type layer: parse, format, extract
@@ -79,10 +79,11 @@ constraints.
    PowerShell- and M-only.)
 6. **Type casting** + richer aggregations: count-distinct, median/percentile, string-join
    (group-and-concatenate).
-7. **Row operations:** keep top-N / bottom-N / row range, add index, rank; replace values;
-   fill down/up.
-8. **Designer column profiling:** null counts, distinct counts, min/max/sample in the
-   preview panel. Cheap, high perceived polish.
+7. **Row operations:** DONE except rank -- `transform.limit` (top-N / bottom-N / row range),
+   `transform.index`, `transform.replace`, `transform.fill` (down/up). **Rank still pending**
+   (its cross-engine tie-ordering parity is the one fiddly bit).
+8. **Designer column profiling:** DONE -- the preview panel shows filled / distinct / min /
+   max per column over the loaded sample.
 9. **Pipeline-level parameters:** prompt for input/output paths (or values) at run time in
    the generated script.
 

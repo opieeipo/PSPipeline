@@ -364,6 +364,100 @@ function Select-PipelineDistinct {
     @($Data | Sort-Object -Property * -Unique)
 }
 
+# --- Row operations --------------------------------------------------------
+
+function Limit-PipelineRow {
+    # Mode: Top|Bottom|Range. Top/Bottom use Count; Range uses Start (1-based) + Count.
+    param([object[]]$Data, [string]$Mode = 'Top', [int]$Count = 10, [int]$Start = 1)
+    $rows = @($Data); $n = $rows.Count
+    if ($n -eq 0 -or $Count -le 0) { return @() }
+    switch ([string]$Mode) {
+        'Bottom' { if ($Count -ge $n) { @($rows) } else { @($rows[($n - $Count)..($n - 1)]) } }
+        'Range'  {
+            $s = $Start - 1; if ($s -lt 0) { $s = 0 }
+            if ($s -ge $n) { return @() }
+            $e = $s + $Count - 1; if ($e -ge $n) { $e = $n - 1 }
+            @($rows[$s..$e])
+        }
+        default  { if ($Count -ge $n) { @($rows) } else { @($rows[0..($Count - 1)]) } }
+    }
+}
+
+function Add-PipelineIndex {
+    param([object[]]$Data, [string]$Name = 'Index', [int]$Start = 1)
+    $i = $Start
+    @(foreach ($row in $Data) {
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $out[$p.Name] = $p.Value }
+        $out[$Name] = $i; $i++
+        [pscustomobject]$out
+    })
+}
+
+function Edit-PipelineValue {
+    # Replace values in $Column. WholeCell: case-insensitive whole-cell match. Otherwise literal substring replace.
+    param([object[]]$Data, [Parameter(Mandatory)][string]$Column, [string]$Find = '', [string]$ReplaceWith = '', [switch]$WholeCell)
+    @(foreach ($row in $Data) {
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) {
+            if ($p.Name -eq $Column) {
+                $val = [string]$p.Value
+                if ($WholeCell) { if ($val -eq $Find) { $val = $ReplaceWith } }
+                elseif ($Find -ne '') { $val = $val.Replace($Find, $ReplaceWith) }
+                $out[$p.Name] = $val
+            }
+            else { $out[$p.Name] = $p.Value }
+        }
+        [pscustomobject]$out
+    })
+}
+
+function Set-PipelineFill {
+    # Fill empty cells in $Columns with the last (Down) or next (Up) non-empty value.
+    param([object[]]$Data, [string[]]$Columns, [string]$Direction = 'Down')
+    $tables = @(foreach ($row in $Data) {
+        $o = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $o[$p.Name] = $p.Value }
+        $o
+    })
+    if ($tables.Count -eq 0) { return @() }
+    foreach ($col in $Columns) {
+        $last = $null
+        if ($Direction -eq 'Up') {
+            for ($i = $tables.Count - 1; $i -ge 0; $i--) {
+                if ([string]$tables[$i][$col] -ne '') { $last = $tables[$i][$col] }
+                elseif ($null -ne $last) { $tables[$i][$col] = $last }
+            }
+        }
+        else {
+            for ($i = 0; $i -lt $tables.Count; $i++) {
+                if ([string]$tables[$i][$col] -ne '') { $last = $tables[$i][$col] }
+                elseif ($null -ne $last) { $tables[$i][$col] = $last }
+            }
+        }
+    }
+    @(foreach ($t in $tables) { [pscustomobject]$t })
+}
+
+function Add-PipelineConditional {
+    # Adds $Name: the Result of the first matching rule, else $Else. Result/Else are
+    # {Column} templates (no code eval, CLM-safe). Rule: { column, operator, value, result }.
+    param([object[]]$Data, [Parameter(Mandatory)][string]$Name, [object[]]$Rules, [string]$Else = '')
+    @(foreach ($row in $Data) {
+        $picked = $Else
+        foreach ($rule in $Rules) {
+            $cond = [pscustomobject]@{ column = $rule.column; operator = $rule.operator; value = $rule.value }
+            if (Test-PipelineCondition -Row $row -Condition $cond) { $picked = [string]$rule.result; break }
+        }
+        $value = $picked
+        foreach ($p in $row.PSObject.Properties) { $value = $value.Replace('{' + $p.Name + '}', [string]$p.Value) }
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $out[$p.Name] = $p.Value }
+        $out[$Name] = $value
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -547,6 +641,11 @@ function Invoke-PipelineNode {
         'transform.filter'    { Where-PipelineRow -Data $Inputs['in'] -Conditions @($config.conditions) -Match $(if ($config.match) { $config.match } else { 'All' }) }
         'transform.sort'      { Sort-PipelineData -Data $Inputs['in'] -SortBy @($config.sortBy) }
         'transform.distinct'  { Select-PipelineDistinct -Data $Inputs['in'] -Columns @($config.columns) }
+        'transform.limit'       { Limit-PipelineRow -Data $Inputs['in'] -Mode $(if ($config.mode) { $config.mode } else { 'Top' }) -Count $(if ($null -ne $config.count) { [int]$config.count } else { 10 }) -Start $(if ($config.start) { [int]$config.start } else { 1 }) }
+        'transform.index'       { Add-PipelineIndex -Data $Inputs['in'] -Name $(if ($config.name) { $config.name } else { 'Index' }) -Start $(if ($null -ne $config.start) { [int]$config.start } else { 1 }) }
+        'transform.replace'     { Edit-PipelineValue -Data $Inputs['in'] -Column $config.column -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -ReplaceWith $(if ($null -ne $config.replaceWith) { [string]$config.replaceWith } else { '' }) -WholeCell:$([bool]$config.wholeCell) }
+        'transform.fill'        { Set-PipelineFill -Data $Inputs['in'] -Columns @($config.columns) -Direction $(if ($config.direction) { $config.direction } else { 'Down' }) }
+        'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 
@@ -647,6 +746,12 @@ function csv_split(line, D, arr,   n,i,c,field,len,inq){
   n++; arr[n]=field; return n
 }
 function csv_quote(s){ gsub(/"/,"\"\"",s); return "\"" s "\"" }
+function lit_replace(s, from, to,   out,p,flen){
+  if(from=="") return s
+  out=""; flen=length(from)
+  while((p=index(s,from))>0){ out=out substr(s,1,p-1) to; s=substr(s,p+flen) }
+  return out s
+}
 '
 # --- compiled pipeline body follows ---
 </script><!-- /sh-runtime-source -->
@@ -822,6 +927,52 @@ function genNode(def, node) {
            + '{ rows[++n]=$0; idx[n]=n; key[n]=' + keyExpr + '; ' + capture + ' }\n'
            + 'END{ for(p=2;p<=n;p++){ pi=idx[p]; q=p-1; while(q>=1 && keycmp(idx[q],pi)>0){ idx[q+1]=idx[q]; q-- } idx[q+1]=pi } '
            + 'for(i=1;i<=n;i++){ kk=key[idx[i]]; if(!(kk in seen)){ seen[kk]=1; print rows[idx[i]] } } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.limit': {
+      const mode = String(cfg.mode || 'Top');
+      const count = cfg.count != null ? parseInt(cfg.count, 10) : 10;
+      const start = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      let end;
+      if (mode === 'Bottom') end = 'END{ s=n-' + count + '+1; if(s<1)s=1; for(i=s;i<=n;i++)print rows[i] }';
+      else if (mode === 'Range') end = 'END{ s=' + start + '; if(s<1)s=1; e=s+' + count + '-1; if(e>n)e=n; for(i=s;i<=e;i++)print rows[i] }';
+      else end = 'END{ e=' + count + '; if(e>n)e=n; for(i=1;i<=e;i++)print rows[i] }';
+      prog = 'BEGIN{FS=US;OFS=US}\nNR==1{ print; next }\n{ rows[++n]=$0 }\n' + end;
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.index': {
+      const start = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      prog = 'BEGIN{FS=US;OFS=US; idx=' + start + '}\nNR==1{ print $0 OFS ' + aws(String(cfg.name || 'Index')) + '; next }\n{ print $0 OFS idx; idx++ }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.replace': {
+      const colName = aws(String(cfg.column));
+      const find = aws(cfg.find != null ? String(cfg.find) : '');
+      const repl = aws(cfg.replaceWith != null ? String(cfg.replaceWith) : '');
+      const apply = cfg.wholeCell
+        ? 'if(tolower(v)==tolower(' + find + ')) v=' + repl + ';'
+        : 'v=lit_replace(v,' + find + ',' + repl + ');';
+      prog = 'BEGIN{FS=US;OFS=US}\nNR==1{ for(i=1;i<=NF;i++)c[$i]=i; print; next }\n{ ci=c[' + colName + ']; if(ci){ v=$ci; ' + apply + ' $ci=v } print }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.fill': {
+      const loop = String(cfg.direction) === 'Up' ? 'for(i=rn;i>=1;i--)' : 'for(i=1;i<=rn;i++)';
+      const blocks = (cfg.columns || []).map(cn =>
+        'ci=c[' + aws(String(cn)) + ']; if(ci){ last=""; ' + loop + '{ if(cell[i,ci]==""){ if(last!="") cell[i,ci]=last } else last=cell[i,ci] } }'
+      ).join(' ');
+      prog = 'BEGIN{FS=US;OFS=US}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; nf=NF; print; next }\n'
+           + '{ rn++; for(j=1;j<=nf;j++) cell[rn,j]=$j }\n'
+           + 'END{ ' + blocks + ' for(i=1;i<=rn;i++){ line=cell[i,1]; for(j=2;j<=nf;j++) line=line OFS cell[i,j]; print line } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.conditional': {
+      let body = 'matched=0; res="";\n';
+      (cfg.rules || []).forEach(r => {
+        body += 'if(!matched && (' + condExpr(r) + ')){ res=' + deriveExpr(String(r.result == null ? '' : r.result)) + '; matched=1 }\n';
+      });
+      body += 'if(!matched){ res=' + deriveExpr(String(cfg['else'] == null ? '' : cfg['else'])) + ' }\n';
+      prog = 'BEGIN{FS=US;OFS=US}\n' + header('print $0 OFS ' + aws(String(cfg.name)) + ';') + '\n{ ' + body + ' print $0 OFS res }';
       return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
     }
     case 'transform.join': {
@@ -1000,6 +1151,59 @@ if (typeof module !== 'undefined' && module.exports) {
       sorted.rows.forEach(r => { const k = keyOf(r); if (!seen[k]) { seen[k] = 1; rows.push(r); } });
       return { columns: inT.columns.slice(), rows };
     }
+    if (t === 'transform.limit') {
+      const inT = src('in'), rows = inT.rows;
+      const mode = String(cfg.mode || 'Top');
+      const count = cfg.count != null ? parseInt(cfg.count, 10) : 10;
+      const start = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      let out;
+      if (count <= 0) out = [];
+      else if (mode === 'Bottom') out = rows.slice(Math.max(0, rows.length - count));
+      else if (mode === 'Range') { const s = Math.max(0, start - 1); out = rows.slice(s, s + count); }
+      else out = rows.slice(0, count);
+      return { columns: inT.columns.slice(), rows: out };
+    }
+    if (t === 'transform.index') {
+      const inT = src('in'), name = String(cfg.name || 'Index');
+      let i = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      return { columns: inT.columns.concat([name]), rows: inT.rows.map(r => r.concat([String(i++)])) };
+    }
+    if (t === 'transform.replace') {
+      const inT = src('in'), ci = inT.columns.indexOf(cfg.column);
+      if (ci < 0) return { columns: inT.columns.slice(), rows: inT.rows.map(r => r.slice()) };
+      const find = cfg.find != null ? String(cfg.find) : '';
+      const repl = cfg.replaceWith != null ? String(cfg.replaceWith) : '';
+      const whole = !!cfg.wholeCell;
+      const rows = inT.rows.map(r => {
+        const nr = r.slice(); let v = String(nr[ci] == null ? '' : nr[ci]);
+        if (whole) { if (v.toLowerCase() === find.toLowerCase()) v = repl; }
+        else if (find !== '') { v = v.split(find).join(repl); }
+        nr[ci] = v; return nr;
+      });
+      return { columns: inT.columns.slice(), rows };
+    }
+    if (t === 'transform.fill') {
+      const inT = src('in'), up = String(cfg.direction) === 'Up';
+      const rows = inT.rows.map(r => r.slice());
+      (cfg.columns || []).forEach(cn => {
+        const ci = inT.columns.indexOf(cn); if (ci < 0) return;
+        let last = null;
+        const step = (i) => { const v = String(rows[i][ci] == null ? '' : rows[i][ci]); if (v !== '') last = rows[i][ci]; else if (last != null) rows[i][ci] = last; };
+        if (up) { for (let i = rows.length - 1; i >= 0; i--) step(i); }
+        else { for (let i = 0; i < rows.length; i++) step(i); }
+      });
+      return { columns: inT.columns.slice(), rows };
+    }
+    if (t === 'transform.conditional') {
+      const inT = src('in'), name = String(cfg.name), rules = cfg.rules || [];
+      const els = cfg['else'] != null ? String(cfg['else']) : '';
+      const rows = inT.rows.map(r => {
+        let picked = els;
+        for (const rule of rules) { if (testCond(inT, r, rule)) { picked = String(rule.result == null ? '' : rule.result); break; } }
+        return r.concat([deriveValue(picked, inT, r)]);
+      });
+      return { columns: inT.columns.concat([name]), rows };
+    }
     if (t === 'transform.join') {
       const L = src('left'), R = src('right'), jt = String(cfg.joinType || 'Inner');
       const lset = {}; L.columns.forEach(c => { lset[c] = 1; });
@@ -1118,6 +1322,26 @@ const NODE_TYPES = {
     { key: 'groupBy', label: 'Group by columns', type: 'columns' },
     { key: 'aggregations', label: 'Aggregations', type: 'aggregations', addLabel: '+ aggregation',
       hint: 'Functions: Count Sum Average Min Max First' } ] },
+  'transform.limit': { name: 'Limit Rows', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'mode', label: 'Mode', type: 'select', default: 'Top', options: ['Top', 'Bottom', 'Range'] },
+    { key: 'count', label: 'Count', type: 'text', placeholder: '10' },
+    { key: 'start', label: 'Start row (Range only, 1-based)', type: 'text', placeholder: '1' } ] },
+  'transform.index': { name: 'Add Index', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'name', label: 'Index column name', type: 'text', placeholder: 'Index' },
+    { key: 'start', label: 'Start at', type: 'text', placeholder: '1' } ] },
+  'transform.replace': { name: 'Replace Values', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'column', label: 'Column', type: 'column' },
+    { key: 'find', label: 'Find', type: 'text' },
+    { key: 'replaceWith', label: 'Replace with', type: 'text' },
+    { key: 'wholeCell', label: 'Match whole cell (else substring)', type: 'checkbox' } ] },
+  'transform.fill': { name: 'Fill Down/Up', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'columns', label: 'Columns to fill', type: 'columns' },
+    { key: 'direction', label: 'Direction', type: 'select', default: 'Down', options: ['Down', 'Up'] } ] },
+  'transform.conditional': { name: 'Conditional Column', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'name', label: 'New column name', type: 'text', placeholder: 'Band' },
+    { key: 'rules', label: 'Rules (first match wins)', type: 'rules', addLabel: '+ rule',
+      hint: 'Each rule: column, operator, value, then the result. Results may use {Column} placeholders.' },
+    { key: 'else', label: 'Otherwise (default value)', type: 'text' } ] },
 
   'output.csv': { name: 'Write Delimited Text', cat: 'output', inputs: ['in'], fields: [
     { key: 'path', label: 'Output path (runtime, on target machine)', type: 'text', placeholder: 'output\\result.csv' },
@@ -1425,6 +1649,9 @@ function outputColumns(id, stack) {
       case 'transform.filter': case 'transform.sort': case 'transform.distinct': res = inc('in'); break;
       case 'transform.join': { const l = inc('left'), r = inc('right'); const ls = {}; l.forEach(c => { ls[c] = 1; }); res = l.concat(r.map(c => ls[c] ? 'Right_' + c : c)); break; }
       case 'transform.aggregate': res = (cfg.groupBy || []).concat((cfg.aggregations || []).map(a => a.as || (a.function + '_' + a.column))); break;
+      case 'transform.limit': case 'transform.replace': case 'transform.fill': res = inc('in'); break;
+      case 'transform.index': res = inc('in').concat([cfg.name || 'Index']); break;
+      case 'transform.conditional': res = inc('in').concat(cfg.name ? [cfg.name] : []); break;
       case 'output.csv': case 'output.json': res = inc('in'); break;
     }
   }
@@ -1548,6 +1775,44 @@ function renderConditions(box, node, field, columns) {
     row.appendChild(txtEl(item.value, v => { item.value = v; }, 'value'));
   }, cols => ({ column: (cols && cols[0]) || '', operator: 'eq', value: '' }));
 }
+function renderRules(box, node, field, columns) {
+  builderScaffold(box, node, field, columns, (row, item, cols) => {
+    row.appendChild(colInput(item.column, cols, v => { item.column = v; renderNodes(); }));
+    row.appendChild(selEl(FILTER_OPS, item.operator || 'eq', v => { item.operator = v; renderNodes(); }));
+    row.appendChild(txtEl(item.value, v => { item.value = v; }, 'value'));
+    row.appendChild(txtEl(item.result, v => { item.result = v; renderNodes(); }, 'then ->'));
+  }, cols => ({ column: (cols && cols[0]) || '', operator: 'eq', value: '', result: '' }));
+}
+function renderCheckbox(box, node, field) {
+  const lbl = document.createElement('label'); lbl.className = 'chkrow'; lbl.style.marginTop = '8px';
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!node.config[field.key];
+  cb.addEventListener('change', () => { snapshotState(); node.config[field.key] = cb.checked; renderNodes(); });
+  lbl.appendChild(cb); lbl.appendChild(document.createTextNode(' ' + field.label));
+  box.appendChild(lbl);
+}
+function renderProfile(panel, cols, rows) {
+  if (!rows.length || !cols.length) return;
+  const numRe = /^[ \t]*[-+]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][-+]?[0-9]+)?[ \t]*$/;
+  const note = document.createElement('div'); note.className = 'preview-note';
+  note.textContent = 'Column profile (' + rows.length + ' sample rows):'; panel.appendChild(note);
+  const tbl = document.createElement('table');
+  const hr = document.createElement('tr');
+  ['Column', 'Filled', 'Distinct', 'Min', 'Max'].forEach(h => { const th = document.createElement('th'); th.textContent = h; hr.appendChild(th); });
+  tbl.appendChild(hr);
+  cols.forEach((name, i) => {
+    let filled = 0; const seen = {}; let distinct = 0, allNum = true; const vals = [];
+    rows.forEach(r => { const v = r[i] == null ? '' : String(r[i]); if (v !== '') { filled++; if (!seen[v]) { seen[v] = 1; distinct++; } if (!numRe.test(v)) allNum = false; vals.push(v); } });
+    let mn = '', mx = '';
+    if (vals.length) {
+      if (allNum) { let lo = +vals[0], hi = +vals[0]; vals.forEach(v => { const n = +v; if (n < lo) lo = n; if (n > hi) hi = n; }); mn = String(lo); mx = String(hi); }
+      else { let lo = vals[0], hi = vals[0]; vals.forEach(v => { if (v.toLowerCase() < lo.toLowerCase()) lo = v; if (v.toLowerCase() > hi.toLowerCase()) hi = v; }); mn = lo; mx = hi; }
+    }
+    const tr = document.createElement('tr');
+    [name, String(filled), String(distinct), mn, mx].forEach((cv, j) => { const td = document.createElement('td'); td.textContent = cv; td.title = cv; if (j === 0) td.style.color = 'var(--accent)'; tr.appendChild(td); });
+    tbl.appendChild(tr);
+  });
+  panel.appendChild(tbl);
+}
 function renderSortBy(box, node, field, columns) {
   builderScaffold(box, node, field, columns, (row, item, cols) => {
     row.appendChild(colInput(item.column, cols, v => { item.column = v; renderNodes(); }));
@@ -1629,6 +1894,7 @@ function renderPreviewPanel(node) {
     const note = document.createElement('div'); note.className = 'preview-note';
     note.textContent = 'Showing ' + Math.min(15, rows.length) + ' of ' + rows.length + ' preview rows, computed in-browser from the loaded sample.';
     panel.appendChild(note);
+    renderProfile(panel, cols, rows);
   } else {
     const note = document.createElement('div'); note.className = 'preview-note';
     note.textContent = 'No preview rows yet. Load a sample file on the input node(s) and the data flows through to here.';
@@ -1664,6 +1930,10 @@ function renderProps() {
       renderAggregations(box, node, field, inCols);
     } else if (field.type === 'renames') {
       renderRenames(box, node, field, inCols);
+    } else if (field.type === 'rules') {
+      renderRules(box, node, field, inCols);
+    } else if (field.type === 'checkbox') {
+      renderCheckbox(box, node, field);
     } else if (field.type === 'list') {
       addField(box, field.label, 'text', (current || []).join(', '), v => {
         node.config[field.key] = v.split(',').map(s => s.trim()).filter(Boolean);

@@ -97,6 +97,45 @@ Describe 'Group-PipelineData' {
     }
 }
 
+Describe 'Row operations' {
+    It 'limit Top keeps the first N rows' {
+        $r = & $Module { param($d) Limit-PipelineRow -Data $d -Mode Top -Count 2 } $People
+        $r.Count | Should -Be 2
+        $r[0].Name | Should -Be 'Ada'
+    }
+    It 'limit Bottom keeps the last N rows' {
+        $r = & $Module { param($d) Limit-PipelineRow -Data $d -Mode Bottom -Count 1 } $People
+        $r.Count | Should -Be 1
+        $r[0].Name | Should -Be 'Cleo'
+    }
+    It 'index adds a 1-based row number' {
+        $r = & $Module { param($d) Add-PipelineIndex -Data $d -Name Row } $People
+        ($r.Row -join ',') | Should -Be '1,2,3'
+    }
+    It 'replace whole-cell is case-insensitive' {
+        $r = & $Module { param($d) Edit-PipelineValue -Data $d -Column Dept -Find 'eng' -ReplaceWith 'E' -WholeCell } $People
+        ($r.Dept -join '|') | Should -Be 'E|E|Sales'
+    }
+    It 'fill down carries the last non-empty value' {
+        $data = @(
+            [pscustomobject]@{ K = 'a'; V = 'x' }
+            [pscustomobject]@{ K = 'b'; V = '' }
+            [pscustomobject]@{ K = 'c'; V = 'y' }
+            [pscustomobject]@{ K = 'd'; V = '' }
+        )
+        $r = & $Module { param($d) Set-PipelineFill -Data $d -Columns V -Direction Down } $data
+        ($r.V -join ',') | Should -Be 'x,x,y,y'
+    }
+}
+
+Describe 'Conditional column' {
+    It 'picks the first matching rule, else the default' {
+        $rules = @([pscustomobject]@{ column = 'Salary'; operator = 'ge'; value = '90'; result = 'High' })
+        $r = & $Module { param($d, $ru) Add-PipelineConditional -Data $d -Name Band -Rules $ru -Else 'Low' } $People $rules
+        ($r.Band -join ',') | Should -Be 'High,High,Low'
+    }
+}
+
 Describe 'Sample pipeline end-to-end' {
     It 'runs sample-pipeline.json and writes the report' {
         $repoRoot = Split-Path -Path $PSScriptRoot -Parent

@@ -216,6 +216,100 @@ function Select-PipelineDistinct {
     @($Data | Sort-Object -Property * -Unique)
 }
 
+# --- Row operations --------------------------------------------------------
+
+function Limit-PipelineRow {
+    # Mode: Top|Bottom|Range. Top/Bottom use Count; Range uses Start (1-based) + Count.
+    param([object[]]$Data, [string]$Mode = 'Top', [int]$Count = 10, [int]$Start = 1)
+    $rows = @($Data); $n = $rows.Count
+    if ($n -eq 0 -or $Count -le 0) { return @() }
+    switch ([string]$Mode) {
+        'Bottom' { if ($Count -ge $n) { @($rows) } else { @($rows[($n - $Count)..($n - 1)]) } }
+        'Range'  {
+            $s = $Start - 1; if ($s -lt 0) { $s = 0 }
+            if ($s -ge $n) { return @() }
+            $e = $s + $Count - 1; if ($e -ge $n) { $e = $n - 1 }
+            @($rows[$s..$e])
+        }
+        default  { if ($Count -ge $n) { @($rows) } else { @($rows[0..($Count - 1)]) } }
+    }
+}
+
+function Add-PipelineIndex {
+    param([object[]]$Data, [string]$Name = 'Index', [int]$Start = 1)
+    $i = $Start
+    @(foreach ($row in $Data) {
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $out[$p.Name] = $p.Value }
+        $out[$Name] = $i; $i++
+        [pscustomobject]$out
+    })
+}
+
+function Edit-PipelineValue {
+    # Replace values in $Column. WholeCell: case-insensitive whole-cell match. Otherwise literal substring replace.
+    param([object[]]$Data, [Parameter(Mandatory)][string]$Column, [string]$Find = '', [string]$ReplaceWith = '', [switch]$WholeCell)
+    @(foreach ($row in $Data) {
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) {
+            if ($p.Name -eq $Column) {
+                $val = [string]$p.Value
+                if ($WholeCell) { if ($val -eq $Find) { $val = $ReplaceWith } }
+                elseif ($Find -ne '') { $val = $val.Replace($Find, $ReplaceWith) }
+                $out[$p.Name] = $val
+            }
+            else { $out[$p.Name] = $p.Value }
+        }
+        [pscustomobject]$out
+    })
+}
+
+function Set-PipelineFill {
+    # Fill empty cells in $Columns with the last (Down) or next (Up) non-empty value.
+    param([object[]]$Data, [string[]]$Columns, [string]$Direction = 'Down')
+    $tables = @(foreach ($row in $Data) {
+        $o = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $o[$p.Name] = $p.Value }
+        $o
+    })
+    if ($tables.Count -eq 0) { return @() }
+    foreach ($col in $Columns) {
+        $last = $null
+        if ($Direction -eq 'Up') {
+            for ($i = $tables.Count - 1; $i -ge 0; $i--) {
+                if ([string]$tables[$i][$col] -ne '') { $last = $tables[$i][$col] }
+                elseif ($null -ne $last) { $tables[$i][$col] = $last }
+            }
+        }
+        else {
+            for ($i = 0; $i -lt $tables.Count; $i++) {
+                if ([string]$tables[$i][$col] -ne '') { $last = $tables[$i][$col] }
+                elseif ($null -ne $last) { $tables[$i][$col] = $last }
+            }
+        }
+    }
+    @(foreach ($t in $tables) { [pscustomobject]$t })
+}
+
+function Add-PipelineConditional {
+    # Adds $Name: the Result of the first matching rule, else $Else. Result/Else are
+    # {Column} templates (no code eval, CLM-safe). Rule: { column, operator, value, result }.
+    param([object[]]$Data, [Parameter(Mandatory)][string]$Name, [object[]]$Rules, [string]$Else = '')
+    @(foreach ($row in $Data) {
+        $picked = $Else
+        foreach ($rule in $Rules) {
+            $cond = [pscustomobject]@{ column = $rule.column; operator = $rule.operator; value = $rule.value }
+            if (Test-PipelineCondition -Row $row -Condition $cond) { $picked = [string]$rule.result; break }
+        }
+        $value = $picked
+        foreach ($p in $row.PSObject.Properties) { $value = $value.Replace('{' + $p.Name + '}', [string]$p.Value) }
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) { $out[$p.Name] = $p.Value }
+        $out[$Name] = $value
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -399,6 +493,11 @@ function Invoke-PipelineNode {
         'transform.filter'    { Where-PipelineRow -Data $Inputs['in'] -Conditions @($config.conditions) -Match $(if ($config.match) { $config.match } else { 'All' }) }
         'transform.sort'      { Sort-PipelineData -Data $Inputs['in'] -SortBy @($config.sortBy) }
         'transform.distinct'  { Select-PipelineDistinct -Data $Inputs['in'] -Columns @($config.columns) }
+        'transform.limit'       { Limit-PipelineRow -Data $Inputs['in'] -Mode $(if ($config.mode) { $config.mode } else { 'Top' }) -Count $(if ($null -ne $config.count) { [int]$config.count } else { 10 }) -Start $(if ($config.start) { [int]$config.start } else { 1 }) }
+        'transform.index'       { Add-PipelineIndex -Data $Inputs['in'] -Name $(if ($config.name) { $config.name } else { 'Index' }) -Start $(if ($null -ne $config.start) { [int]$config.start } else { 1 }) }
+        'transform.replace'     { Edit-PipelineValue -Data $Inputs['in'] -Column $config.column -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -ReplaceWith $(if ($null -ne $config.replaceWith) { [string]$config.replaceWith } else { '' }) -WholeCell:$([bool]$config.wholeCell) }
+        'transform.fill'        { Set-PipelineFill -Data $Inputs['in'] -Columns @($config.columns) -Direction $(if ($config.direction) { $config.direction } else { 'Down' }) }
+        'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 
