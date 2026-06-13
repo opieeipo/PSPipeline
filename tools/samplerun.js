@@ -98,6 +98,59 @@
       sorted.rows.forEach(r => { const k = keyOf(r); if (!seen[k]) { seen[k] = 1; rows.push(r); } });
       return { columns: inT.columns.slice(), rows };
     }
+    if (t === 'transform.limit') {
+      const inT = src('in'), rows = inT.rows;
+      const mode = String(cfg.mode || 'Top');
+      const count = cfg.count != null ? parseInt(cfg.count, 10) : 10;
+      const start = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      let out;
+      if (count <= 0) out = [];
+      else if (mode === 'Bottom') out = rows.slice(Math.max(0, rows.length - count));
+      else if (mode === 'Range') { const s = Math.max(0, start - 1); out = rows.slice(s, s + count); }
+      else out = rows.slice(0, count);
+      return { columns: inT.columns.slice(), rows: out };
+    }
+    if (t === 'transform.index') {
+      const inT = src('in'), name = String(cfg.name || 'Index');
+      let i = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      return { columns: inT.columns.concat([name]), rows: inT.rows.map(r => r.concat([String(i++)])) };
+    }
+    if (t === 'transform.replace') {
+      const inT = src('in'), ci = inT.columns.indexOf(cfg.column);
+      if (ci < 0) return { columns: inT.columns.slice(), rows: inT.rows.map(r => r.slice()) };
+      const find = cfg.find != null ? String(cfg.find) : '';
+      const repl = cfg.replaceWith != null ? String(cfg.replaceWith) : '';
+      const whole = !!cfg.wholeCell;
+      const rows = inT.rows.map(r => {
+        const nr = r.slice(); let v = String(nr[ci] == null ? '' : nr[ci]);
+        if (whole) { if (v.toLowerCase() === find.toLowerCase()) v = repl; }
+        else if (find !== '') { v = v.split(find).join(repl); }
+        nr[ci] = v; return nr;
+      });
+      return { columns: inT.columns.slice(), rows };
+    }
+    if (t === 'transform.fill') {
+      const inT = src('in'), up = String(cfg.direction) === 'Up';
+      const rows = inT.rows.map(r => r.slice());
+      (cfg.columns || []).forEach(cn => {
+        const ci = inT.columns.indexOf(cn); if (ci < 0) return;
+        let last = null;
+        const step = (i) => { const v = String(rows[i][ci] == null ? '' : rows[i][ci]); if (v !== '') last = rows[i][ci]; else if (last != null) rows[i][ci] = last; };
+        if (up) { for (let i = rows.length - 1; i >= 0; i--) step(i); }
+        else { for (let i = 0; i < rows.length; i++) step(i); }
+      });
+      return { columns: inT.columns.slice(), rows };
+    }
+    if (t === 'transform.conditional') {
+      const inT = src('in'), name = String(cfg.name), rules = cfg.rules || [];
+      const els = cfg['else'] != null ? String(cfg['else']) : '';
+      const rows = inT.rows.map(r => {
+        let picked = els;
+        for (const rule of rules) { if (testCond(inT, r, rule)) { picked = String(rule.result == null ? '' : rule.result); break; } }
+        return r.concat([deriveValue(picked, inT, r)]);
+      });
+      return { columns: inT.columns.concat([name]), rows };
+    }
     if (t === 'transform.join') {
       const L = src('left'), R = src('right'), jt = String(cfg.joinType || 'Inner');
       const lset = {}; L.columns.forEach(c => { lset[c] = 1; });

@@ -171,6 +171,52 @@ function genNode(def, node) {
            + 'for(i=1;i<=n;i++){ kk=key[idx[i]]; if(!(kk in seen)){ seen[kk]=1; print rows[idx[i]] } } }';
       return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
     }
+    case 'transform.limit': {
+      const mode = String(cfg.mode || 'Top');
+      const count = cfg.count != null ? parseInt(cfg.count, 10) : 10;
+      const start = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      let end;
+      if (mode === 'Bottom') end = 'END{ s=n-' + count + '+1; if(s<1)s=1; for(i=s;i<=n;i++)print rows[i] }';
+      else if (mode === 'Range') end = 'END{ s=' + start + '; if(s<1)s=1; e=s+' + count + '-1; if(e>n)e=n; for(i=s;i<=e;i++)print rows[i] }';
+      else end = 'END{ e=' + count + '; if(e>n)e=n; for(i=1;i<=e;i++)print rows[i] }';
+      prog = 'BEGIN{FS=US;OFS=US}\nNR==1{ print; next }\n{ rows[++n]=$0 }\n' + end;
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.index': {
+      const start = cfg.start != null ? parseInt(cfg.start, 10) : 1;
+      prog = 'BEGIN{FS=US;OFS=US; idx=' + start + '}\nNR==1{ print $0 OFS ' + aws(String(cfg.name || 'Index')) + '; next }\n{ print $0 OFS idx; idx++ }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.replace': {
+      const colName = aws(String(cfg.column));
+      const find = aws(cfg.find != null ? String(cfg.find) : '');
+      const repl = aws(cfg.replaceWith != null ? String(cfg.replaceWith) : '');
+      const apply = cfg.wholeCell
+        ? 'if(tolower(v)==tolower(' + find + ')) v=' + repl + ';'
+        : 'v=lit_replace(v,' + find + ',' + repl + ');';
+      prog = 'BEGIN{FS=US;OFS=US}\nNR==1{ for(i=1;i<=NF;i++)c[$i]=i; print; next }\n{ ci=c[' + colName + ']; if(ci){ v=$ci; ' + apply + ' $ci=v } print }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.fill': {
+      const loop = String(cfg.direction) === 'Up' ? 'for(i=rn;i>=1;i--)' : 'for(i=1;i<=rn;i++)';
+      const blocks = (cfg.columns || []).map(cn =>
+        'ci=c[' + aws(String(cn)) + ']; if(ci){ last=""; ' + loop + '{ if(cell[i,ci]==""){ if(last!="") cell[i,ci]=last } else last=cell[i,ci] } }'
+      ).join(' ');
+      prog = 'BEGIN{FS=US;OFS=US}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; nf=NF; print; next }\n'
+           + '{ rn++; for(j=1;j<=nf;j++) cell[rn,j]=$j }\n'
+           + 'END{ ' + blocks + ' for(i=1;i<=rn;i++){ line=cell[i,1]; for(j=2;j<=nf;j++) line=line OFS cell[i,j]; print line } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.conditional': {
+      let body = 'matched=0; res="";\n';
+      (cfg.rules || []).forEach(r => {
+        body += 'if(!matched && (' + condExpr(r) + ')){ res=' + deriveExpr(String(r.result == null ? '' : r.result)) + '; matched=1 }\n';
+      });
+      body += 'if(!matched){ res=' + deriveExpr(String(cfg['else'] == null ? '' : cfg['else'])) + ' }\n';
+      prog = 'BEGIN{FS=US;OFS=US}\n' + header('print $0 OFS ' + aws(String(cfg.name)) + ';') + '\n{ ' + body + ' print $0 OFS res }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
     case 'transform.join': {
       const jt = String(cfg.joinType || 'Inner');
       const right = wf(ins['right']), left = wf(ins['left']);

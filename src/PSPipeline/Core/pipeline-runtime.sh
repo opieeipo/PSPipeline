@@ -39,5 +39,11 @@ function csv_split(line, D, arr,   n,i,c,field,len,inq){
   n++; arr[n]=field; return n
 }
 function csv_quote(s){ gsub(/"/,"\"\"",s); return "\"" s "\"" }
+function lit_replace(s, from, to,   out,p,flen){
+  if(from=="") return s
+  out=""; flen=length(from)
+  while((p=index(s,from))>0){ out=out substr(s,1,p-1) to; s=substr(s,p+flen) }
+  return out s
+}
 '
 # --- compiled pipeline body follows ---

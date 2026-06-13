@@ -88,8 +88,8 @@ deployment story.
 | Category | Nodes |
 | --- | --- |
 | **Inputs** | Delimited text (CSV, TSV, pipe, any delimiter, flat `.txt`), Fixed-width, JSON |
-| **Column ops** | Select, Drop, Rename, Derived column (`{First} {Last}` templates) |
-| **Row ops** | Filter (eq, ne, gt, ge, lt, le, contains, startswith, endswith, isempty, isnotempty; All/Any), Sort, Distinct |
+| **Column ops** | Select, Drop, Rename, Derived column (`{First} {Last}` templates), Conditional column (ordered if/then rules) |
+| **Row ops** | Filter (eq, ne, gt, ge, lt, le, contains, startswith, endswith, isempty, isnotempty; All/Any), Sort, Distinct, Limit (top/bottom/range), Add index, Replace values, Fill down/up |
 | **Combine** | **Join (Inner, Left, Right, Full outer)** (hash join, key-collision-safe), Aggregate (Count, Sum, Average, Min, Max, First with Group By) |
 | **Outputs** | Delimited text (any delimiter), JSON |
 

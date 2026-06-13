@@ -23,6 +23,8 @@
               "transform.select", "transform.drop", "transform.rename",
               "transform.derive", "transform.filter", "transform.sort",
               "transform.distinct", "transform.join", "transform.aggregate",
+              "transform.limit", "transform.index", "transform.replace",
+              "transform.fill", "transform.conditional",
               "output.csv", "output.json"
             ]
           },
