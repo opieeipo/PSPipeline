@@ -75,13 +75,18 @@ ConvertTo-PSPipelineScript -Path .\samples\sample-pipeline.json `
                            -OutputPath .\Invoke-DataPipeline.ps1
 
 # On any other machine — no module, no internet, PowerShell 5.1+:
-. .\Invoke-DataPipeline.ps1
-Invoke-DataPipeline -BasePath C:\Data -Verbose
+.\Invoke-DataPipeline.ps1 -BasePath C:\Data -Verbose   # run it directly
+.\Invoke-DataPipeline.ps1 -Help                        # built-in help
+Get-Help .\Invoke-DataPipeline.ps1 -Full               # full comment-based help
+
+# ...or dot-source to load the function and call it yourself:
+. .\Invoke-DataPipeline.ps1; Invoke-DataPipeline -BasePath C:\Data
 ```
 
-The generated script inlines the entire transform engine, embeds the pipeline
-definition as JSON, and exposes exactly one function. That's the whole
-deployment story.
+The generated script carries comment-based help and a `-Help` switch, exposes one
+entry function (`Invoke-DataPipeline`), and keeps the inlined transform engine in a
+clearly fenced "Embedded engine" region. Run the file to run the pipeline, or
+dot-source it to load the function. That's the whole deployment story.
 
 ## What it can do today
 
@@ -111,6 +116,12 @@ shell, and preview are verified byte-for-byte against each other on every node; 
 verified structurally, since it cannot be run without Excel. Where a target genuinely cannot
 express a node it declines with a clear message rather than emit something subtly wrong (for
 example, awk declines pivot because its output columns are data-dependent).
+
+Every generated script is self-documenting and runnable as-is: the PowerShell export has
+comment-based help (`Get-Help`), a `-Help` switch, and runs directly or dot-sources; the shell
+export has a `-h` / `--help` usage screen and a single `pspl_run` entry; the M export opens with
+a header explaining where to paste it. The transform engine sits in a clearly fenced region so
+the actual pipeline logic is easy to find.
 
 ## Built for hostile environments
 

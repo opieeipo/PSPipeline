@@ -4,9 +4,12 @@
     Embeds the runnable sources into the offline designer (designer/index.html)
     so the in-browser backends can emit fully self-contained scripts:
 
-      * src/PSPipeline/Core/PipelineFunctions.ps1  -> #ps-engine-source  (PowerShell backend)
-      * src/PSPipeline/Core/pipeline-runtime.sh    -> #sh-runtime-source  (shell backend runtime)
-      * tools/shellgen.js                          -> #shellgen-source    (shell backend generator)
+      * src/PSPipeline/Core/PipelineFunctions.ps1  -> #ps-engine-source   (PowerShell engine)
+      * src/PSPipeline/Core/pipeline-runtime.sh    -> #sh-runtime-source  (shell engine library)
+      * tools/shellgen.js                          -> #shellgen-source    (shell generator)
+      * tools/samplerun.js                         -> #samplerun-source   (preview executor)
+      * tools/mquery.js                            -> #mquery-source      (Power Query M generator)
+      * tools/psgen.js                             -> #psgen-source       (PowerShell script builder)
 
     Run this whenever any of those sources change. The designer is otherwise
     hand-edited.
@@ -46,6 +49,7 @@ $runtime  = (Read-Utf8 (Join-Path $repoRoot 'src/PSPipeline/Core/pipeline-runtim
 $shellgen  = (Read-Utf8 (Join-Path $repoRoot 'tools/shellgen.js')).TrimEnd()
 $samplerun = (Read-Utf8 (Join-Path $repoRoot 'tools/samplerun.js')).TrimEnd()
 $mquery    = (Read-Utf8 (Join-Path $repoRoot 'tools/mquery.js')).TrimEnd()
+$psgen     = (Read-Utf8 (Join-Path $repoRoot 'tools/psgen.js')).TrimEnd()
 
 $html = Read-Utf8 $designerPath
 $html = Set-EmbeddedBlock $html '<script type="text/plain" id="ps-engine-source">' '</script><!-- /ps-engine-source -->' $engine
@@ -53,7 +57,8 @@ $html = Set-EmbeddedBlock $html '<script type="text/plain" id="sh-runtime-source
 $html = Set-EmbeddedBlock $html '<script id="shellgen-source">' '</script><!-- /shellgen-source -->' $shellgen
 $html = Set-EmbeddedBlock $html '<script id="samplerun-source">' '</script><!-- /samplerun-source -->' $samplerun
 $html = Set-EmbeddedBlock $html '<script id="mquery-source">' '</script><!-- /mquery-source -->' $mquery
+$html = Set-EmbeddedBlock $html '<script id="psgen-source">' '</script><!-- /psgen-source -->' $psgen
 
 # Write UTF-8 without a BOM so the HTML file stays clean across re-syncs.
 [System.IO.File]::WriteAllText($designerPath, $html, (New-Object System.Text.UTF8Encoding($false)))
-Write-Host "Synced engine + shell runtime + shell generator + preview executor + M generator into designer/index.html."
+Write-Host "Synced engine + shell runtime + shell/M/PowerShell generators + preview executor into designer/index.html."

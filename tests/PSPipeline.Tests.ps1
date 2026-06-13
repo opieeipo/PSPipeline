@@ -286,11 +286,30 @@ Describe 'Sample pipeline end-to-end' {
 }
 
 Describe 'ConvertTo-PSPipelineScript' {
+    BeforeAll {
+        $script:repoRoot2 = Split-Path -Path $PSScriptRoot -Parent
+        $script:genText = ConvertTo-PSPipelineScript -Path (Join-Path $repoRoot2 'samples/sample-pipeline.json')
+    }
     It 'generates a parseable standalone script' {
-        $repoRoot = Split-Path -Path $PSScriptRoot -Parent
-        $scriptText = ConvertTo-PSPipelineScript -Path (Join-Path $repoRoot 'samples/sample-pipeline.json')
         $tokens = $null; $errors = $null
-        [void][System.Management.Automation.Language.Parser]::ParseInput($scriptText, [ref]$tokens, [ref]$errors)
+        [void][System.Management.Automation.Language.Parser]::ParseInput($genText, [ref]$tokens, [ref]$errors)
         $errors.Count | Should -Be 0
+    }
+    It 'carries comment-based help with a recognizable layout' {
+        # #Requires, then a blank line, then the help block (so Get-Help sees script help).
+        $genText | Should -Match "(?m)^#Requires -Version 5\.1"
+        $genText | Should -Match "(?m)^\.SYNOPSIS"
+        $genText | Should -Match "(?m)^\.PARAMETER BasePath"
+        $genText | Should -Match "(?m)^\.PARAMETER Help"
+        $genText | Should -Match "(?m)^\.EXAMPLE"
+    }
+    It 'exposes a single entry function and a Help switch' {
+        $genText | Should -Match 'function Invoke-DataPipeline'
+        $genText | Should -Match '\[switch\]\$Help'
+    }
+    It 'fences the embedded engine and runs it only when invoked directly' {
+        $genText | Should -Match 'Embedded transform engine'
+        $genText | Should -Match 'End embedded engine'
+        $genText | Should -Match "if \(\`$MyInvocation\.InvocationName -ne '\.'\)"
     }
 }

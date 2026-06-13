@@ -9,7 +9,7 @@ set -e
 
 staged=$(git diff --cached --name-only)
 case "$staged" in
-  *"src/PSPipeline/Core/PipelineFunctions.ps1"*|*"src/PSPipeline/Core/pipeline-runtime.sh"*|*"tools/shellgen.js"*|*"tools/samplerun.js"*|*"tools/mquery.js"*) ;;
+  *"src/PSPipeline/Core/PipelineFunctions.ps1"*|*"src/PSPipeline/Core/pipeline-runtime.sh"*|*"tools/shellgen.js"*|*"tools/samplerun.js"*|*"tools/mquery.js"*|*"tools/psgen.js"*) ;;
   *) exit 0 ;;   # no embedded source staged -> nothing to do
 esac
 
