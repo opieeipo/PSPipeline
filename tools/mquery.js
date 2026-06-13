@@ -154,6 +154,29 @@
         const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
         return 'Table.Combine({' + sources.map(ref).join(', ') + '})';
       }
+      case 'transform.date': {
+        const op = String(cfg.op || 'year');
+        const dx = r0 => 'Date.From(' + r0 + ')';
+        const body = (rA, rB) => {
+          switch (op) {
+            case 'year': return 'Date.Year(' + dx(rA) + ')';
+            case 'month': return 'Date.Month(' + dx(rA) + ')';
+            case 'day': return 'Date.Day(' + dx(rA) + ')';
+            case 'weekday': return 'Date.DayOfWeek(' + dx(rA) + ', Day.Monday) + 1';
+            case 'format': return 'Date.ToText(' + dx(rA) + ', [Format = ' + mStr(String(cfg.format || 'yyyy-MM-dd')) + '])';
+            case 'diffdays': return 'Duration.Days(' + dx(rA) + ' - ' + dx(rB) + ')';
+            default: return 'null';
+          }
+        };
+        if ((cfg.as && cfg.as !== cfg.column) || op === 'diffdays') {
+          return 'Table.AddColumn(' + inn() + ', ' + mStr(cfg.as || cfg.column) + ', each ' + body(fld(cfg.column), fld(cfg.column2)) + ')';
+        }
+        return 'Table.TransformColumns(' + inn() + ', {{' + mStr(cfg.column) + ', each ' + body('_', '_') + ', type any}})';
+      }
+      case 'transform.cast': {
+        const ty = { number: 'type number', integer: 'Int64.Type', text: 'type text' }[String(cfg.to || 'text')] || 'type text';
+        return 'Table.TransformColumnTypes(' + inn() + ', {{' + mStr(cfg.column) + ', ' + ty + '}})';
+      }
       case 'transform.unpivot':
         return 'Table.UnpivotOtherColumns(' + inn() + ', ' + mList(cfg.keep || []) + ', ' + mStr(cfg.attributeName || 'Attribute') + ', ' + mStr(cfg.valueName || 'Value') + ')';
       case 'transform.pivot': {

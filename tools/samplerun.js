@@ -18,6 +18,20 @@
   function idx(table, name) { return table.columns.indexOf(name); }
   function val(table, row, name) { const i = table.columns.indexOf(name); return i < 0 ? '' : (row[i] == null ? '' : row[i]); }
   function num(x) { return isNum(x) ? +x : 0; }
+  function jdn(y, m, d) { var a = Math.floor((14 - m) / 12), y2 = y + 4800 - a, m2 = m + 12 * a - 3; return d + Math.floor((153 * m2 + 2) / 5) + 365 * y2 + Math.floor(y2 / 4) - Math.floor(y2 / 100) + Math.floor(y2 / 400) - 32045; }
+  function dparts(s) { var m = String(s == null ? '' : s).match(/^\s*(\d{4})\D+(\d{1,2})\D+(\d{1,2})/); return m ? { y: +m[1], M: +m[2], d: +m[3] } : null; }
+  function pad(n, w) { var s = String(n); while (s.length < w) s = '0' + s; return s; }
+  function fmtDate(y, M, d, f) {
+    var yyyy = pad(y, 4), MM = pad(M, 2), dd = pad(d, 2);
+    switch (f) {
+      case 'yyyy/MM/dd': return yyyy + '/' + MM + '/' + dd;
+      case 'MM/dd/yyyy': return MM + '/' + dd + '/' + yyyy;
+      case 'dd/MM/yyyy': return dd + '/' + MM + '/' + yyyy;
+      case 'yyyyMMdd': return yyyy + MM + dd;
+      case 'yyyy-MM': return yyyy + '-' + MM;
+      default: return yyyy + '-' + MM + '-' + dd;
+    }
+  }
 
   function testCond(table, row, cond) {
     const a = val(table, row, cond.column), b = cond.value == null ? '' : String(cond.value);
@@ -227,6 +241,41 @@
         return cells;
       });
       return { columns, rows };
+    }
+    if (t === 'transform.date') {
+      const inT = src('in'), col = cfg.column, op = String(cfg.op || 'year'), tgt = cfg.as || col;
+      const columns = inT.columns.indexOf(tgt) >= 0 ? inT.columns.slice() : inT.columns.concat([tgt]);
+      const ti = columns.indexOf(tgt);
+      const rows = inT.rows.map(r => {
+        const p = dparts(val(inT, r, col));
+        let res = '';
+        if (p) {
+          if (op === 'year') res = p.y;
+          else if (op === 'month') res = p.M;
+          else if (op === 'day') res = p.d;
+          else if (op === 'weekday') res = (jdn(p.y, p.M, p.d) % 7) + 1;
+          else if (op === 'format') res = fmtDate(p.y, p.M, p.d, String(cfg.format || 'yyyy-MM-dd'));
+          else if (op === 'diffdays') { const p2 = dparts(val(inT, r, cfg.column2)); res = p2 ? (jdn(p.y, p.M, p.d) - jdn(p2.y, p2.M, p2.d)) : ''; }
+        }
+        const nr = inT.columns.map((c, i) => (r[i] == null ? '' : r[i]));
+        while (nr.length < columns.length) nr.push('');
+        nr[ti] = String(res);
+        return nr;
+      });
+      return { columns, rows };
+    }
+    if (t === 'transform.cast') {
+      const inT = src('in'), col = cfg.column, to = String(cfg.to || 'text'), ci = inT.columns.indexOf(col);
+      const rows = inT.rows.map(r => {
+        const nr = inT.columns.map((c, i) => (r[i] == null ? '' : r[i]));
+        if (ci >= 0) {
+          const v = nr[ci];
+          if (to === 'number') nr[ci] = isNum(v) ? String(Number(v)) : v;
+          else if (to === 'integer') nr[ci] = isNum(v) ? String(Math.trunc(Number(v))) : v;
+        }
+        return nr;
+      });
+      return { columns: inT.columns.slice(), rows };
     }
     if (t === 'transform.unpivot') {
       const inT = src('in'), keep = (cfg.keep || []).map(String);

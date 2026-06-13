@@ -84,8 +84,15 @@ constraints.
    title case, extract before / after / between, optional target column). Merge-columns is
    covered by the derive node's `{Column}` templates. **Split-into-N-columns still pending**
    (its column count is data-dependent).
-4. **Date/time functions** + a light type layer: parse, format, extract
-   (year/month/day/weekday), difference. Turns "reshape" into "actually clean."
+4. **Date/time functions** + a light type layer. DONE -- the `transform.date` node
+   (extract year/month/day/ISO-weekday, reformat to a fixed set of layouts, and whole-day
+   difference between two date columns) and the `transform.cast` node (text/number/integer
+   normalization). Input is restricted to ISO-ish dates (`yyyy-MM-dd`) and the date math is
+   self-implemented as a Julian Day Number in every engine, so the result is byte-identical
+   across PS/awk/preview (verified) and structurally correct in M -- which means the awk
+   backend handles dates too, rather than declining as originally feared. Anticipated awk
+   date-format parity problems were avoided by computing the layout ourselves instead of
+   leaning on each platform's date formatter.
 5. **Pivot / unpivot** (long <-> wide). DONE -- the `transform.unpivot` node (wide to long)
    runs in all engines and verifies byte-equal (PS/awk/preview, M via `Table.UnpivotOtherColumns`).
    The `transform.pivot` node (long to wide) runs in PowerShell + preview + M (`Table.Pivot`);

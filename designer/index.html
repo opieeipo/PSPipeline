@@ -613,6 +613,85 @@ function Convert-PipelinePivot {
     })
 }
 
+# --- Date / type ------------------------------------------------------------
+
+function Get-PipelineDateParts {
+    # Parse an ISO-ish date (yyyy<sep>MM<sep>dd, any non-digit separators, optional
+    # trailing time) into integer Y/M/D. Returns $null if it does not match.
+    param([string]$Value)
+    if ($Value -match '^\s*(\d{4})\D+(\d{1,2})\D+(\d{1,2})') {
+        [pscustomobject]@{ Y = [int]$matches[1]; M = [int]$matches[2]; D = [int]$matches[3] }
+    } else { $null }
+}
+
+function Get-PipelineJdn {
+    # Julian Day Number from a proleptic Gregorian date. Pure integer math so it is
+    # identical across PowerShell, awk, JavaScript, and M.
+    param([int]$Y, [int]$M, [int]$D)
+    $a = [int][math]::Floor((14 - $M) / 12)
+    $y2 = $Y + 4800 - $a
+    $m2 = $M + 12 * $a - 3
+    [int]($D + [int][math]::Floor((153 * $m2 + 2) / 5) + 365 * $y2 + [int][math]::Floor($y2 / 4) - [int][math]::Floor($y2 / 100) + [int][math]::Floor($y2 / 400) - 32045)
+}
+
+function Format-PipelineDate {
+    param([int]$Y, [int]$M, [int]$D, [string]$Format)
+    $yyyy = '{0:D4}' -f $Y; $MM = '{0:D2}' -f $M; $dd = '{0:D2}' -f $D
+    switch ($Format) {
+        'yyyy/MM/dd' { "$yyyy/$MM/$dd" }
+        'MM/dd/yyyy' { "$MM/$dd/$yyyy" }
+        'dd/MM/yyyy' { "$dd/$MM/$yyyy" }
+        'yyyyMMdd'   { "$yyyy$MM$dd" }
+        'yyyy-MM'    { "$yyyy-$MM" }
+        default      { "$yyyy-$MM-$dd" }
+    }
+}
+
+function Convert-PipelineDate {
+    # Extract a component, reformat, or take a day-difference from an ISO-ish date column.
+    param([object[]]$Data, [string]$Column, [string]$Op, [string]$Column2, [string]$Format, [string]$As)
+    $target = if ($As) { $As } else { $Column }
+    @(foreach ($row in $Data) {
+        $p = Get-PipelineDateParts ([string]$row.$Column)
+        $result = if ($null -eq $p) { '' } else {
+            switch ($Op) {
+                'year'    { $p.Y }
+                'month'   { $p.M }
+                'day'     { $p.D }
+                'weekday' { ((Get-PipelineJdn $p.Y $p.M $p.D) % 7) + 1 }  # ISO: Monday=1 .. Sunday=7
+                'format'  { Format-PipelineDate $p.Y $p.M $p.D $Format }
+                'diffdays' {
+                    $p2 = Get-PipelineDateParts ([string]$row.$Column2)
+                    if ($null -eq $p2) { '' } else { (Get-PipelineJdn $p.Y $p.M $p.D) - (Get-PipelineJdn $p2.Y $p2.M $p2.D) }
+                }
+                default { '' }
+            }
+        }
+        $out = [ordered]@{}
+        foreach ($prop in $row.PSObject.Properties) { $out[$prop.Name] = $prop.Value }
+        $out[$target] = $result
+        [pscustomobject]$out
+    })
+}
+
+function Convert-PipelineCast {
+    # Light type normalization (mostly meaningful for the M export's typing).
+    param([object[]]$Data, [string]$Column, [string]$To)
+    @(foreach ($row in $Data) {
+        $v = [string]$row.$Column
+        $n = 0.0
+        $new = switch ($To) {
+            'number'  { if ([double]::TryParse($v, [ref]$n)) { $n } else { $v } }
+            'integer' { if ([double]::TryParse($v, [ref]$n)) { [int][math]::Truncate($n) } else { $v } }
+            default   { $v }
+        }
+        $out = [ordered]@{}
+        foreach ($prop in $row.PSObject.Properties) { $out[$prop.Name] = $prop.Value }
+        $out[$Column] = $new
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -819,6 +898,8 @@ function Invoke-PipelineNode {
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.union'       { Union-PipelineData -Tables $InputList }
+        'transform.date'        { Convert-PipelineDate -Data $Inputs['in'] -Column $config.column -Op $config.op -Column2 $config.column2 -Format $config.format -As $config.as }
+        'transform.cast'        { Convert-PipelineCast -Data $Inputs['in'] -Column $config.column -To $(if ($config.to) { $config.to } else { 'text' }) }
         'transform.unpivot'     { Convert-PipelineUnpivot -Data $Inputs['in'] -Keep @($config.keep) -AttributeName $(if ($config.attributeName) { $config.attributeName } else { 'Attribute' }) -ValueName $(if ($config.valueName) { $config.valueName } else { 'Value' }) }
         'transform.pivot'       { Convert-PipelinePivot -Data $Inputs['in'] -GroupBy @($config.groupBy) -PivotColumn $config.pivotColumn -ValueColumn $config.valueColumn -Aggregate $(if ($config.aggregate) { $config.aggregate } else { 'First' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
@@ -1248,6 +1329,38 @@ function genNode(def, node) {
            + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
       return label + '\n' + awkStep(prog, files, node.id);
     }
+    case 'transform.date': {
+      // Self-implemented JDN + ISO-ish parse so the result is identical to the other engines.
+      const DATEFNS =
+        'function jdn(y,m,d,  a,y2,m2){a=int((14-m)/12);y2=y+4800-a;m2=m+12*a-3;return d+int((153*m2+2)/5)+365*y2+int(y2/4)-int(y2/100)+int(y2/400)-32045}\n' +
+        'function dparse(s,  t,n,arr){t=s;sub(/^[ \\t]+/,"",t);if(t !~ /^[0-9][0-9][0-9][0-9][^0-9]+[0-9]+[^0-9]+[0-9]+/)return 0;n=split(t,arr,/[^0-9]+/);DY=arr[1]+0;DM=arr[2]+0;DD=arr[3]+0;return 1}\n' +
+        'function dfmt(y,m,d,f){if(f=="yyyy/MM/dd")return sprintf("%04d/%02d/%02d",y,m,d);if(f=="MM/dd/yyyy")return sprintf("%02d/%02d/%04d",m,d,y);if(f=="dd/MM/yyyy")return sprintf("%02d/%02d/%04d",d,m,y);if(f=="yyyyMMdd")return sprintf("%04d%02d%02d",y,m,d);if(f=="yyyy-MM")return sprintf("%04d-%02d",y,m);return sprintf("%04d-%02d-%02d",y,m,d)}\n';
+      const dcol = aws(String(cfg.column));
+      const op = String(cfg.op || 'year');
+      const tgt = aws(cfg.as ? String(cfg.as) : String(cfg.column));
+      let setR;
+      switch (op) {
+        case 'month':    setR = 'r=DM;'; break;
+        case 'day':      setR = 'r=DD;'; break;
+        case 'weekday':  setR = 'r=(jdn(DY,DM,DD)%7)+1;'; break;
+        case 'format':   setR = 'r=dfmt(DY,DM,DD,' + aws(String(cfg.format || 'yyyy-MM-dd')) + ');'; break;
+        case 'diffdays': setR = 'jd=jdn(DY,DM,DD); ci2=c[' + aws(String(cfg.column2 || '')) + ']; if(dparse($(ci2))) r=jd-jdn(DY,DM,DD); else r="";'; break;
+        default:         setR = 'r=DY;';
+      }
+      prog = DATEFNS + 'BEGIN{FS=US;OFS=US}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; if(' + tgt + ' in c) print $0; else print $0 OFS ' + tgt + '; next }\n'
+           + '{ ci=c[' + dcol + ']; r=""; if(dparse($(ci))){ ' + setR + ' } ti=(' + tgt + ' in c)?c[' + tgt + ']:0; if(ti){ $(ti)=r; print } else { print $0 OFS r } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.cast': {
+      const ccol = aws(String(cfg.column));
+      const to = String(cfg.to || 'text');
+      const castBody = to === 'number' ? 'if(is_num(v)) v=v+0;' : (to === 'integer' ? 'if(is_num(v)) v=int(v+0);' : '');
+      prog = 'BEGIN{FS=US;OFS=US;CONVFMT="%.15g";OFMT="%.15g"}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; print; next }\n'
+           + '{ ci=c[' + ccol + ']; if(ci){ v=$(ci); ' + castBody + ' $(ci)=v } print }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
     case 'transform.unpivot': {
       const keepInit = (cfg.keep || []).map(k => 'keep[' + aws(String(k)) + ']=1;').join(' ');
       const attr = aws(String(cfg.attributeName || 'Attribute'));
@@ -1365,6 +1478,20 @@ if (typeof module !== 'undefined' && module.exports) {
   function idx(table, name) { return table.columns.indexOf(name); }
   function val(table, row, name) { const i = table.columns.indexOf(name); return i < 0 ? '' : (row[i] == null ? '' : row[i]); }
   function num(x) { return isNum(x) ? +x : 0; }
+  function jdn(y, m, d) { var a = Math.floor((14 - m) / 12), y2 = y + 4800 - a, m2 = m + 12 * a - 3; return d + Math.floor((153 * m2 + 2) / 5) + 365 * y2 + Math.floor(y2 / 4) - Math.floor(y2 / 100) + Math.floor(y2 / 400) - 32045; }
+  function dparts(s) { var m = String(s == null ? '' : s).match(/^\s*(\d{4})\D+(\d{1,2})\D+(\d{1,2})/); return m ? { y: +m[1], M: +m[2], d: +m[3] } : null; }
+  function pad(n, w) { var s = String(n); while (s.length < w) s = '0' + s; return s; }
+  function fmtDate(y, M, d, f) {
+    var yyyy = pad(y, 4), MM = pad(M, 2), dd = pad(d, 2);
+    switch (f) {
+      case 'yyyy/MM/dd': return yyyy + '/' + MM + '/' + dd;
+      case 'MM/dd/yyyy': return MM + '/' + dd + '/' + yyyy;
+      case 'dd/MM/yyyy': return dd + '/' + MM + '/' + yyyy;
+      case 'yyyyMMdd': return yyyy + MM + dd;
+      case 'yyyy-MM': return yyyy + '-' + MM;
+      default: return yyyy + '-' + MM + '-' + dd;
+    }
+  }
 
   function testCond(table, row, cond) {
     const a = val(table, row, cond.column), b = cond.value == null ? '' : String(cond.value);
@@ -1575,6 +1702,41 @@ if (typeof module !== 'undefined' && module.exports) {
       });
       return { columns, rows };
     }
+    if (t === 'transform.date') {
+      const inT = src('in'), col = cfg.column, op = String(cfg.op || 'year'), tgt = cfg.as || col;
+      const columns = inT.columns.indexOf(tgt) >= 0 ? inT.columns.slice() : inT.columns.concat([tgt]);
+      const ti = columns.indexOf(tgt);
+      const rows = inT.rows.map(r => {
+        const p = dparts(val(inT, r, col));
+        let res = '';
+        if (p) {
+          if (op === 'year') res = p.y;
+          else if (op === 'month') res = p.M;
+          else if (op === 'day') res = p.d;
+          else if (op === 'weekday') res = (jdn(p.y, p.M, p.d) % 7) + 1;
+          else if (op === 'format') res = fmtDate(p.y, p.M, p.d, String(cfg.format || 'yyyy-MM-dd'));
+          else if (op === 'diffdays') { const p2 = dparts(val(inT, r, cfg.column2)); res = p2 ? (jdn(p.y, p.M, p.d) - jdn(p2.y, p2.M, p2.d)) : ''; }
+        }
+        const nr = inT.columns.map((c, i) => (r[i] == null ? '' : r[i]));
+        while (nr.length < columns.length) nr.push('');
+        nr[ti] = String(res);
+        return nr;
+      });
+      return { columns, rows };
+    }
+    if (t === 'transform.cast') {
+      const inT = src('in'), col = cfg.column, to = String(cfg.to || 'text'), ci = inT.columns.indexOf(col);
+      const rows = inT.rows.map(r => {
+        const nr = inT.columns.map((c, i) => (r[i] == null ? '' : r[i]));
+        if (ci >= 0) {
+          const v = nr[ci];
+          if (to === 'number') nr[ci] = isNum(v) ? String(Number(v)) : v;
+          else if (to === 'integer') nr[ci] = isNum(v) ? String(Math.trunc(Number(v))) : v;
+        }
+        return nr;
+      });
+      return { columns: inT.columns.slice(), rows };
+    }
     if (t === 'transform.unpivot') {
       const inT = src('in'), keep = (cfg.keep || []).map(String);
       const attr = String(cfg.attributeName || 'Attribute'), valn = String(cfg.valueName || 'Value');
@@ -1784,6 +1946,29 @@ if (typeof module !== 'undefined' && module.exports) {
         const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
         return 'Table.Combine({' + sources.map(ref).join(', ') + '})';
       }
+      case 'transform.date': {
+        const op = String(cfg.op || 'year');
+        const dx = r0 => 'Date.From(' + r0 + ')';
+        const body = (rA, rB) => {
+          switch (op) {
+            case 'year': return 'Date.Year(' + dx(rA) + ')';
+            case 'month': return 'Date.Month(' + dx(rA) + ')';
+            case 'day': return 'Date.Day(' + dx(rA) + ')';
+            case 'weekday': return 'Date.DayOfWeek(' + dx(rA) + ', Day.Monday) + 1';
+            case 'format': return 'Date.ToText(' + dx(rA) + ', [Format = ' + mStr(String(cfg.format || 'yyyy-MM-dd')) + '])';
+            case 'diffdays': return 'Duration.Days(' + dx(rA) + ' - ' + dx(rB) + ')';
+            default: return 'null';
+          }
+        };
+        if ((cfg.as && cfg.as !== cfg.column) || op === 'diffdays') {
+          return 'Table.AddColumn(' + inn() + ', ' + mStr(cfg.as || cfg.column) + ', each ' + body(fld(cfg.column), fld(cfg.column2)) + ')';
+        }
+        return 'Table.TransformColumns(' + inn() + ', {{' + mStr(cfg.column) + ', each ' + body('_', '_') + ', type any}})';
+      }
+      case 'transform.cast': {
+        const ty = { number: 'type number', integer: 'Int64.Type', text: 'type text' }[String(cfg.to || 'text')] || 'type text';
+        return 'Table.TransformColumnTypes(' + inn() + ', {{' + mStr(cfg.column) + ', ' + ty + '}})';
+      }
       case 'transform.unpivot':
         return 'Table.UnpivotOtherColumns(' + inn() + ', ' + mList(cfg.keep || []) + ', ' + mStr(cfg.attributeName || 'Attribute') + ', ' + mStr(cfg.valueName || 'Value') + ')';
       case 'transform.pivot': {
@@ -1915,6 +2100,17 @@ const NODE_TYPES = {
     { key: 'find2', label: 'Second marker (between only)', type: 'text' },
     { key: 'as', label: 'Output column (blank = in place)', type: 'text' } ] },
   'transform.union': { name: 'Union / Append', cat: 'transform', inputs: ['in'], fields: [] },
+  'transform.date': { name: 'Date', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'column', label: 'Date column (ISO-ish: yyyy-MM-dd)', type: 'column' },
+    { key: 'op', label: 'Operation', type: 'select', default: 'year', options: ['year', 'month', 'day', 'weekday', 'format', 'diffdays'] },
+    { key: 'format', label: 'Output format (format only)', type: 'select', default: 'yyyy-MM-dd', options: ['yyyy-MM-dd', 'yyyy/MM/dd', 'MM/dd/yyyy', 'dd/MM/yyyy', 'yyyyMMdd', 'yyyy-MM'] },
+    { key: 'column2', label: 'Second date column (diffdays only)', type: 'column' },
+    { key: 'as', label: 'Output column (blank = in place)', type: 'text',
+      hint: 'Input dates must be ISO-ish (yyyy-MM-dd). weekday is ISO (1=Mon .. 7=Sun); diffdays = this column minus the second column, in whole days.' } ] },
+  'transform.cast': { name: 'Cast Type', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'column', label: 'Column', type: 'column' },
+    { key: 'to', label: 'Type', type: 'select', default: 'text', options: ['text', 'number', 'integer'],
+      hint: 'Light normalization for downstream use (especially the M export). Non-numeric values are left untouched.' } ] },
   'transform.unpivot': { name: 'Unpivot (wide to long)', cat: 'transform', inputs: ['in'], fields: [
     { key: 'keep', label: 'Keep columns (every other column is unpivoted)', type: 'columns' },
     { key: 'attributeName', label: 'Attribute column name', type: 'text', placeholder: 'Attribute' },
@@ -2032,7 +2228,7 @@ const NODE_ICONS = {
   'transform.filter': '🔍', 'transform.sort': '↕️', 'transform.distinct': '💠', 'transform.join': '🔗',
   'transform.aggregate': '📊', 'transform.limit': '🔝', 'transform.index': '#️⃣', 'transform.replace': '🔁',
   'transform.fill': '🪣', 'transform.conditional': '🔀', 'transform.text': '🔤', 'transform.union': '📚',
-  'transform.unpivot': '🔃', 'transform.pivot': '🔄',
+  'transform.unpivot': '🔃', 'transform.pivot': '🔄', 'transform.date': '📅', 'transform.cast': '🏷️',
   'output.csv': '💾', 'output.json': '📦'
 };
 function iconFor(type) { return NODE_ICONS[type] || '•'; }
@@ -2390,6 +2586,8 @@ function outputColumns(id, stack) {
       case 'transform.conditional': res = inc('in').concat(cfg.name ? [cfg.name] : []); break;
       case 'transform.text': res = inc('in').concat(cfg.as ? [cfg.as] : []); break;
       case 'transform.union': { const sn = {}; res = []; (edges || []).filter(e => e.to === id).map(e => e.from).forEach(sid => outputColumns(sid, stack).forEach(c => { if (!sn[c]) { sn[c] = 1; res.push(c); } })); break; }
+      case 'transform.date': { const c = inc('in'); res = (cfg.as && c.indexOf(cfg.as) < 0) ? c.concat([cfg.as]) : c; break; }
+      case 'transform.cast': res = inc('in'); break;
       case 'transform.unpivot': res = (cfg.keep || []).concat([cfg.attributeName || 'Attribute', cfg.valueName || 'Value']); break;
       case 'transform.pivot': res = (cfg.groupBy || []).slice(); break;  // pivot value columns are data-dependent; preview fills them in
       case 'output.csv': case 'output.json': res = inc('in'); break;
