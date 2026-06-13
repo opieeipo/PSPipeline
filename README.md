@@ -138,7 +138,7 @@ PSPipeline/
 - [x] Designer quality-of-life: undo/redo (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) and a read-only input path that the sample picker fills in
 - [x] In-browser standalone script generation (the designer emits the zero-dependency `.ps1` directly)
 - [x] Cross-platform code generation: a POSIX `sh` + `awk` backend alongside PowerShell (delimited + fixed-width input, all transforms, delimited output; JSON pending)
-- [ ] **M / Power Query export backend** (next priority): compile a pipeline to Power Query M so users can take it into Excel / Power BI (the on-ramp to the Microsoft BI stack, not a rival to it)
+- [x] **M / Power Query export backend** (v1): the "Power Query M" Generate target compiles a pipeline to M for Excel / Power BI (all nodes except fixed-width input; columns export as text). The on-ramp to the Microsoft BI stack, not a rival.
 - [ ] **Power Query transform-parity track**: union/append (incl. folder-of-files), conditional column, text & date functions, pivot/unpivot, type casting, richer aggregations, row ops, column profiling
 - [x] Pipeline-level parameters: declare named params and bind `${Name}` into input/output paths; override at run time via PowerShell function params or shell env vars
 - [ ] PowerShell Gallery publication
