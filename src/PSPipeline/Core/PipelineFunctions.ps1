@@ -505,6 +505,22 @@ function Convert-PipelineCast {
     })
 }
 
+function Select-PipelineColumnOrder {
+    # Reorder columns without dropping any. Listed columns come first in the given
+    # order; any input columns not listed are appended in their original order.
+    param([object[]]$Data, [string[]]$Order)
+    $rows = @($Data); if ($rows.Count -eq 0) { return @() }
+    $all = @($rows[0].PSObject.Properties.Name)
+    $final = New-Object System.Collections.ArrayList
+    foreach ($c in $Order) { if (($all -contains $c) -and ($final -notcontains $c)) { [void]$final.Add($c) } }
+    foreach ($c in $all) { if ($final -notcontains $c) { [void]$final.Add($c) } }
+    @(foreach ($row in $rows) {
+        $out = [ordered]@{}
+        foreach ($c in $final) { $out[$c] = $row.$c }
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -711,6 +727,7 @@ function Invoke-PipelineNode {
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.union'       { Union-PipelineData -Tables $InputList }
+        'transform.reorder'     { Select-PipelineColumnOrder -Data $Inputs['in'] -Order @($config.order) }
         'transform.date'        { Convert-PipelineDate -Data $Inputs['in'] -Column $config.column -Op $config.op -Column2 $config.column2 -Format $config.format -As $config.as }
         'transform.cast'        { Convert-PipelineCast -Data $Inputs['in'] -Column $config.column -To $(if ($config.to) { $config.to } else { 'text' }) }
         'transform.unpivot'     { Convert-PipelineUnpivot -Data $Inputs['in'] -Keep @($config.keep) -AttributeName $(if ($config.attributeName) { $config.attributeName } else { 'Attribute' }) -ValueName $(if ($config.valueName) { $config.valueName } else { 'Value' }) }
