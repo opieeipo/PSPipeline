@@ -170,6 +170,15 @@
       if (as) return { columns: inT.columns.concat([as]), rows: inT.rows.map(r => r.concat([apply(ci >= 0 ? r[ci] : '')])) };
       return { columns: inT.columns.slice(), rows: inT.rows.map(r => { const nr = r.slice(); nr[ci] = apply(nr[ci]); return nr; }) };
     }
+    if (t === 'transform.union') {
+      const sources = (def.edges || []).filter(e => e.to === id).map(e => e.from);
+      const tables = sources.map(s => out[s] || { columns: [], rows: [] });
+      const cols = [], seen = {};
+      tables.forEach(tb => tb.columns.forEach(c => { if (!seen[c]) { seen[c] = 1; cols.push(c); } }));
+      const rows = [];
+      tables.forEach(tb => tb.rows.forEach(r => rows.push(cols.map(c => { const i = tb.columns.indexOf(c); return i >= 0 ? (r[i] == null ? '' : r[i]) : ''; }))));
+      return { columns: cols, rows };
+    }
     if (t === 'transform.join') {
       const L = src('left'), R = src('right'), jt = String(cfg.joinType || 'Inner');
       const lset = {}; L.columns.forEach(c => { lset[c] = 1; });

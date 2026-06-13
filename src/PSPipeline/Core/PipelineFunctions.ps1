@@ -346,6 +346,32 @@ function Edit-PipelineText {
     })
 }
 
+function Union-PipelineData {
+    # Stacks the rows of every input table. Output columns are the union of all
+    # input columns in first-appearance order; cells absent from a row are empty.
+    param([object[]]$Tables)
+    $cols = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($t in $Tables) {
+        $rows = @($t)
+        if ($rows.Count -gt 0) {
+            foreach ($p in $rows[0].PSObject.Properties) {
+                if (-not $seen.ContainsKey($p.Name)) { $seen[$p.Name] = $true; [void]$cols.Add($p.Name) }
+            }
+        }
+    }
+    @(foreach ($t in $Tables) {
+        foreach ($row in @($t)) {
+            $out = [ordered]@{}
+            foreach ($c in $cols) {
+                $prop = $row.PSObject.Properties[$c]
+                $out[$c] = if ($prop) { $prop.Value } else { '' }
+            }
+            [pscustomobject]$out
+        }
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -512,9 +538,12 @@ function Get-PipelineExecutionOrder {
 
 function Invoke-PipelineNode {
     # $Inputs maps input port name ('in', 'left', 'right') to that port's data.
+    # $InputList is the ordered list of ALL incoming results (used by multi-input
+    # nodes like union, which accept several edges into one port).
     param(
         [Parameter(Mandatory)]$Node,
-        [hashtable]$Inputs
+        [hashtable]$Inputs,
+        [object[]]$InputList = @()
     )
     $config = $Node.config
     switch ([string]$Node.type) {
@@ -535,6 +564,7 @@ function Invoke-PipelineNode {
         'transform.fill'        { Set-PipelineFill -Data $Inputs['in'] -Columns @($config.columns) -Direction $(if ($config.direction) { $config.direction } else { 'Down' }) }
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
+        'transform.union'       { Union-PipelineData -Tables $InputList }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 
@@ -605,16 +635,18 @@ function Invoke-PipelineDefinition {
     foreach ($id in (Get-PipelineExecutionOrder -Definition $Definition)) {
         $node = $nodesById[$id]
         $inputs = @{}
+        $inputList = New-Object System.Collections.ArrayList
         foreach ($edge in @($Definition.edges)) {
             if ($edge.to -eq $id) {
                 $port = if ($edge.toPort) { [string]$edge.toPort } else { 'in' }
                 $inputs[$port] = $results[$edge.from]
+                [void]$inputList.Add($results[$edge.from])
             }
         }
         if (-not $Quiet) {
             Write-Verbose ("Running node '{0}' ({1})" -f $id, $node.type)
         }
-        $results[$id] = @(Invoke-PipelineNode -Node $node -Inputs $inputs)
+        $results[$id] = @(Invoke-PipelineNode -Node $node -Inputs $inputs -InputList $inputList)
     }
 
     # Return the output of every leaf node, keyed by node id.
