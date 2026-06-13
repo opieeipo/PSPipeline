@@ -24,12 +24,16 @@ function Invoke-PSPipeline {
         [string]$Path,
 
         [Parameter(Mandatory, ParameterSetName = 'Definition', ValueFromPipeline)]
-        [object]$Definition
+        [object]$Definition,
+
+        # Runtime overrides for declared pipeline parameters (name -> value),
+        # e.g. -Parameters @{ InputPath = 'C:\Data\june.csv' }.
+        [hashtable]$Parameters = @{}
     )
     process {
         if ($PSCmdlet.ParameterSetName -eq 'Path') {
             $Definition = Get-Content -Path $Path -Raw | ConvertFrom-Json
         }
-        Invoke-PipelineDefinition -Definition $Definition
+        Invoke-PipelineDefinition -Definition $Definition -Parameters $Parameters
     }
 }

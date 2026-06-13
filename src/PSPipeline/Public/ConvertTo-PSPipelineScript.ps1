@@ -41,6 +41,7 @@ function ConvertTo-PSPipelineScript {
     $coreSource = Get-Content -Path $corePath -Raw
 
     $pipelineName = if ($definition.name) { [string]$definition.name } else { (Split-Path -Path $Path -Leaf) }
+    $params = @($definition.parameters | Where-Object { $_ -and $_.name })
 
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add('<#')
@@ -57,7 +58,17 @@ function ConvertTo-PSPipelineScript {
     [void]$lines.Add('    [CmdletBinding()]')
     [void]$lines.Add('    param(')
     [void]$lines.Add('        # Optional: directory that relative input/output paths are resolved against.')
-    [void]$lines.Add('        [string]$BasePath')
+    if ($params.Count) {
+        [void]$lines.Add('        [string]$BasePath,')
+        for ($pi = 0; $pi -lt $params.Count; $pi++) {
+            $pDefault = ([string]$params[$pi].default).Replace("'", "''")
+            $pComma = if ($pi -lt $params.Count - 1) { ',' } else { '' }
+            [void]$lines.Add("        [string]`$$($params[$pi].name) = '$pDefault'$pComma")
+        }
+    }
+    else {
+        [void]$lines.Add('        [string]$BasePath')
+    }
     [void]$lines.Add('    )')
     [void]$lines.Add('')
     [void]$lines.Add($coreSource.TrimEnd())
@@ -66,9 +77,14 @@ function ConvertTo-PSPipelineScript {
     [void]$lines.Add($json)
     [void]$lines.Add("'@")
     [void]$lines.Add('')
+    [void]$lines.Add('    $Params = @{}')
+    foreach ($p in $params) {
+        [void]$lines.Add("    `$Params['$(([string]$p.name).Replace("'","''"))'] = `$$($p.name)")
+    }
+    [void]$lines.Add('')
     [void]$lines.Add('    if ($BasePath) { Push-Location -Path $BasePath }')
     [void]$lines.Add('    try {')
-    [void]$lines.Add('        Invoke-PipelineDefinition -Definition ($pipelineJson | ConvertFrom-Json)')
+    [void]$lines.Add('        Invoke-PipelineDefinition -Definition ($pipelineJson | ConvertFrom-Json) -Parameters $Params')
     [void]$lines.Add('    }')
     [void]$lines.Add('    finally {')
     [void]$lines.Add('        if ($BasePath) { Pop-Location }')

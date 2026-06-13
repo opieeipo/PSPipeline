@@ -546,6 +546,40 @@ function Invoke-PipelineNode {
     }
 }
 
+function Expand-PipelineValue {
+    # Recursively replaces ${Name} tokens in every string value of $Value using
+    # the $Params map (name -> value). Used to bind runtime parameters into a
+    # parsed pipeline definition (paths and any other string config).
+    param($Value, [hashtable]$Params)
+    if ($null -eq $Value) { return $Value }
+    if ($Value -is [string]) {
+        $out = $Value
+        foreach ($k in $Params.Keys) { $out = $out.Replace('${' + $k + '}', [string]$Params[$k]) }
+        return $out
+    }
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $o = [ordered]@{}
+        foreach ($p in $Value.PSObject.Properties) { $o[$p.Name] = Expand-PipelineValue -Value $p.Value -Params $Params }
+        return [pscustomobject]$o
+    }
+    if ($Value -is [object[]]) {
+        return @(foreach ($item in $Value) { Expand-PipelineValue -Value $item -Params $Params })
+    }
+    return $Value
+}
+
+function Resolve-PipelineParameter {
+    # Effective parameter map = each declared parameter's default, overridden by $Overrides.
+    param($Definition, [hashtable]$Overrides = @{})
+    $vals = @{}
+    foreach ($p in @($Definition.parameters)) {
+        if ($null -eq $p -or -not $p.name) { continue }
+        $name = [string]$p.name
+        $vals[$name] = if ($Overrides.ContainsKey($name)) { [string]$Overrides[$name] } else { [string]$p.default }
+    }
+    $vals
+}
+
 function Invoke-PipelineDefinition {
     <#
     .SYNOPSIS
@@ -554,9 +588,13 @@ function Invoke-PipelineDefinition {
     #>
     param(
         [Parameter(Mandatory)]$Definition,
-        [switch]$Quiet
+        [switch]$Quiet,
+        [hashtable]$Parameters = @{}
     )
     Assert-PipelineHost
+    if ($Definition.parameters) {
+        $Definition = Expand-PipelineValue -Value $Definition -Params (Resolve-PipelineParameter -Definition $Definition -Overrides $Parameters)
+    }
     $nodesById = @{}
     foreach ($node in $Definition.nodes) { $nodesById[$node.id] = $node }
 

@@ -140,7 +140,7 @@ PSPipeline/
 - [x] Cross-platform code generation: a POSIX `sh` + `awk` backend alongside PowerShell (delimited + fixed-width input, all transforms, delimited output; JSON pending)
 - [ ] **M / Power Query export backend** (next priority): compile a pipeline to Power Query M so users can take it into Excel / Power BI (the on-ramp to the Microsoft BI stack, not a rival to it)
 - [ ] **Power Query transform-parity track**: union/append (incl. folder-of-files), conditional column, text & date functions, pivot/unpivot, type casting, richer aggregations, row ops, column profiling
-- [ ] Pipeline-level parameters (e.g. input path prompts at run time)
+- [x] Pipeline-level parameters: declare named params and bind `${Name}` into input/output paths; override at run time via PowerShell function params or shell env vars
 - [ ] PowerShell Gallery publication
 - [ ] _Parked / undecided_: PowerShell 7+ parallel target (`ForEach-Object -Parallel` over independent DAG branches). Deprioritized in favor of the M work; may revisit later.
 
