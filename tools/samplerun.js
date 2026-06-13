@@ -228,6 +228,36 @@
       });
       return { columns, rows };
     }
+    if (t === 'transform.unpivot') {
+      const inT = src('in'), keep = (cfg.keep || []).map(String);
+      const attr = String(cfg.attributeName || 'Attribute'), valn = String(cfg.valueName || 'Value');
+      const valCols = inT.columns.filter(c => keep.indexOf(c) < 0);
+      const columns = keep.concat([attr, valn]);
+      const rows = [];
+      inT.rows.forEach(r => { valCols.forEach(vc => { rows.push(keep.map(k => val(inT, r, k)).concat([vc, val(inT, r, vc)])); }); });
+      return { columns, rows };
+    }
+    if (t === 'transform.pivot') {
+      const inT = src('in'), gb = (cfg.groupBy || []).map(String), agg = String(cfg.aggregate || 'First');
+      const pivotVals = [], pseen = {};
+      inT.rows.forEach(r => { const pv = String(val(inT, r, cfg.pivotColumn)), lp = pv.toLowerCase(); if (!pseen[lp]) { pseen[lp] = 1; pivotVals.push(pv); } });
+      const order = [], groups = {};
+      inT.rows.forEach(r => { const key = gb.map(c => val(inT, r, c)).join(''); if (!groups[key]) { groups[key] = { keyvals: gb.map(c => val(inT, r, c)), rows: [] }; order.push(key); } groups[key].rows.push(r); });
+      const columns = gb.concat(pivotVals);
+      const rows = order.map(key => {
+        const g = groups[key], cells = g.keyvals.slice();
+        pivotVals.forEach(pv => {
+          const matching = g.rows.filter(r => String(val(inT, r, cfg.pivotColumn)).toLowerCase() === pv.toLowerCase());
+          let v = '';
+          if (agg === 'Count') v = matching.length;
+          else if (agg === 'Sum') { const sn = matching.map(r => val(inT, r, cfg.valueColumn)).filter(isNum).map(Number); v = sn.length ? sn.reduce((s, n) => s + n, 0) : ''; }
+          else v = matching.length ? val(inT, matching[0], cfg.valueColumn) : '';
+          cells.push(String(v));
+        });
+        return cells;
+      });
+      return { columns, rows };
+    }
     if (t === 'output.csv' || t === 'output.json') return src('in');
     return { columns: [], rows: [] };
   }

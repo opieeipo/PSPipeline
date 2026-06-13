@@ -372,6 +372,60 @@ function Union-PipelineData {
     })
 }
 
+function Convert-PipelineUnpivot {
+    # Wide -> long. Keeps $Keep columns; melts every other column into two columns:
+    # $AttributeName (the source column name) and $ValueName (its cell value).
+    param([object[]]$Data, [string[]]$Keep, [string]$AttributeName = 'Attribute', [string]$ValueName = 'Value')
+    $rows = @($Data); if ($rows.Count -eq 0) { return @() }
+    $valCols = @(foreach ($p in $rows[0].PSObject.Properties.Name) { if ($Keep -notcontains $p) { $p } })
+    @(foreach ($row in $rows) {
+        foreach ($vc in $valCols) {
+            $out = [ordered]@{}
+            foreach ($k in $Keep) { $out[$k] = $row.$k }
+            $out[$AttributeName] = $vc
+            $out[$ValueName] = $row.$vc
+            [pscustomobject]$out
+        }
+    })
+}
+
+function Convert-PipelinePivot {
+    # Long -> wide. Groups by $GroupBy; the distinct values of $PivotColumn become
+    # columns whose cells are the $Aggregate (First|Sum|Count) of $ValueColumn.
+    param([object[]]$Data, [string[]]$GroupBy, [Parameter(Mandatory)][string]$PivotColumn, [string]$ValueColumn, [string]$Aggregate = 'First')
+    $rows = @($Data)
+    $pivotVals = New-Object System.Collections.ArrayList
+    $pseen = @{}
+    foreach ($row in $rows) { $pv = [string]$row.$PivotColumn; if (-not $pseen.ContainsKey($pv)) { $pseen[$pv] = $true; [void]$pivotVals.Add($pv) } }
+    $order = New-Object System.Collections.ArrayList
+    $groups = @{}
+    foreach ($row in $rows) {
+        $key = (@(foreach ($g in $GroupBy) { [string]$row.$g }) -join [char]31)
+        if (-not $groups.ContainsKey($key)) {
+            $groups[$key] = [pscustomobject]@{ KeyVals = @(foreach ($g in $GroupBy) { $row.$g }); Rows = (New-Object System.Collections.ArrayList) }
+            [void]$order.Add($key)
+        }
+        [void]$groups[$key].Rows.Add($row)
+    }
+    @(foreach ($key in $order) {
+        $grp = $groups[$key]
+        $out = [ordered]@{}
+        for ($gi = 0; $gi -lt $GroupBy.Count; $gi++) { $out[$GroupBy[$gi]] = $grp.KeyVals[$gi] }
+        foreach ($pv in $pivotVals) {
+            $matching = @($grp.Rows | Where-Object { [string]$_.$PivotColumn -eq $pv })
+            $out[$pv] = switch ([string]$Aggregate) {
+                'Count' { $matching.Count }
+                'Sum' {
+                    $nums = @(foreach ($m in $matching) { $n = 0.0; if ([double]::TryParse([string]$m.$ValueColumn, [ref]$n)) { $n } })
+                    ($nums | Measure-Object -Sum).Sum
+                }
+                default { if ($matching.Count -gt 0) { $matching[0].$ValueColumn } else { '' } }
+            }
+        }
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -578,6 +632,8 @@ function Invoke-PipelineNode {
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.union'       { Union-PipelineData -Tables $InputList }
+        'transform.unpivot'     { Convert-PipelineUnpivot -Data $Inputs['in'] -Keep @($config.keep) -AttributeName $(if ($config.attributeName) { $config.attributeName } else { 'Attribute' }) -ValueName $(if ($config.valueName) { $config.valueName } else { 'Value' }) }
+        'transform.pivot'       { Convert-PipelinePivot -Data $Inputs['in'] -GroupBy @($config.groupBy) -PivotColumn $config.pivotColumn -ValueColumn $config.valueColumn -Aggregate $(if ($config.aggregate) { $config.aggregate } else { 'First' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 

@@ -559,6 +559,60 @@ function Union-PipelineData {
     })
 }
 
+function Convert-PipelineUnpivot {
+    # Wide -> long. Keeps $Keep columns; melts every other column into two columns:
+    # $AttributeName (the source column name) and $ValueName (its cell value).
+    param([object[]]$Data, [string[]]$Keep, [string]$AttributeName = 'Attribute', [string]$ValueName = 'Value')
+    $rows = @($Data); if ($rows.Count -eq 0) { return @() }
+    $valCols = @(foreach ($p in $rows[0].PSObject.Properties.Name) { if ($Keep -notcontains $p) { $p } })
+    @(foreach ($row in $rows) {
+        foreach ($vc in $valCols) {
+            $out = [ordered]@{}
+            foreach ($k in $Keep) { $out[$k] = $row.$k }
+            $out[$AttributeName] = $vc
+            $out[$ValueName] = $row.$vc
+            [pscustomobject]$out
+        }
+    })
+}
+
+function Convert-PipelinePivot {
+    # Long -> wide. Groups by $GroupBy; the distinct values of $PivotColumn become
+    # columns whose cells are the $Aggregate (First|Sum|Count) of $ValueColumn.
+    param([object[]]$Data, [string[]]$GroupBy, [Parameter(Mandatory)][string]$PivotColumn, [string]$ValueColumn, [string]$Aggregate = 'First')
+    $rows = @($Data)
+    $pivotVals = New-Object System.Collections.ArrayList
+    $pseen = @{}
+    foreach ($row in $rows) { $pv = [string]$row.$PivotColumn; if (-not $pseen.ContainsKey($pv)) { $pseen[$pv] = $true; [void]$pivotVals.Add($pv) } }
+    $order = New-Object System.Collections.ArrayList
+    $groups = @{}
+    foreach ($row in $rows) {
+        $key = (@(foreach ($g in $GroupBy) { [string]$row.$g }) -join [char]31)
+        if (-not $groups.ContainsKey($key)) {
+            $groups[$key] = [pscustomobject]@{ KeyVals = @(foreach ($g in $GroupBy) { $row.$g }); Rows = (New-Object System.Collections.ArrayList) }
+            [void]$order.Add($key)
+        }
+        [void]$groups[$key].Rows.Add($row)
+    }
+    @(foreach ($key in $order) {
+        $grp = $groups[$key]
+        $out = [ordered]@{}
+        for ($gi = 0; $gi -lt $GroupBy.Count; $gi++) { $out[$GroupBy[$gi]] = $grp.KeyVals[$gi] }
+        foreach ($pv in $pivotVals) {
+            $matching = @($grp.Rows | Where-Object { [string]$_.$PivotColumn -eq $pv })
+            $out[$pv] = switch ([string]$Aggregate) {
+                'Count' { $matching.Count }
+                'Sum' {
+                    $nums = @(foreach ($m in $matching) { $n = 0.0; if ([double]::TryParse([string]$m.$ValueColumn, [ref]$n)) { $n } })
+                    ($nums | Measure-Object -Sum).Sum
+                }
+                default { if ($matching.Count -gt 0) { $matching[0].$ValueColumn } else { '' } }
+            }
+        }
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -765,6 +819,8 @@ function Invoke-PipelineNode {
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.union'       { Union-PipelineData -Tables $InputList }
+        'transform.unpivot'     { Convert-PipelineUnpivot -Data $Inputs['in'] -Keep @($config.keep) -AttributeName $(if ($config.attributeName) { $config.attributeName } else { 'Attribute' }) -ValueName $(if ($config.valueName) { $config.valueName } else { 'Value' }) }
+        'transform.pivot'       { Convert-PipelinePivot -Data $Inputs['in'] -GroupBy @($config.groupBy) -PivotColumn $config.pivotColumn -ValueColumn $config.valueColumn -Aggregate $(if ($config.aggregate) { $config.aggregate } else { 'First' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 
@@ -1192,6 +1248,18 @@ function genNode(def, node) {
            + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
       return label + '\n' + awkStep(prog, files, node.id);
     }
+    case 'transform.unpivot': {
+      const keepInit = (cfg.keep || []).map(k => 'keep[' + aws(String(k)) + ']=1;').join(' ');
+      const attr = aws(String(cfg.attributeName || 'Attribute'));
+      const val = aws(String(cfg.valueName || 'Value'));
+      prog = 'BEGIN{FS=US;OFS=US; ' + keepInit + '}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++) name[i]=$i; kn=0; vn=0; for(i=1;i<=NF;i++){ if($i in keep){ ki[++kn]=i } else { vi[++vn]=i } } '
+           + 'h=""; for(j=1;j<=kn;j++) h=h (j>1?OFS:"") name[ki[j]]; if(kn>0) h=h OFS; h=h ' + attr + ' OFS ' + val + '; print h; next }\n'
+           + '{ for(v=1;v<=vn;v++){ line=""; for(j=1;j<=kn;j++) line=line (j>1?OFS:"") $(ki[j]); if(kn>0) line=line OFS; line=line name[vi[v]] OFS $(vi[v]); print line } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.pivot':
+      throw new Error("Pivot is not supported in the shell target (its output columns are data-dependent); use the PowerShell or M target for node '" + node.id + "'.");
     case 'transform.join': {
       const jt = String(cfg.joinType || 'Inner');
       const right = wf(ins['right']), left = wf(ins['left']);
@@ -1507,6 +1575,36 @@ if (typeof module !== 'undefined' && module.exports) {
       });
       return { columns, rows };
     }
+    if (t === 'transform.unpivot') {
+      const inT = src('in'), keep = (cfg.keep || []).map(String);
+      const attr = String(cfg.attributeName || 'Attribute'), valn = String(cfg.valueName || 'Value');
+      const valCols = inT.columns.filter(c => keep.indexOf(c) < 0);
+      const columns = keep.concat([attr, valn]);
+      const rows = [];
+      inT.rows.forEach(r => { valCols.forEach(vc => { rows.push(keep.map(k => val(inT, r, k)).concat([vc, val(inT, r, vc)])); }); });
+      return { columns, rows };
+    }
+    if (t === 'transform.pivot') {
+      const inT = src('in'), gb = (cfg.groupBy || []).map(String), agg = String(cfg.aggregate || 'First');
+      const pivotVals = [], pseen = {};
+      inT.rows.forEach(r => { const pv = String(val(inT, r, cfg.pivotColumn)), lp = pv.toLowerCase(); if (!pseen[lp]) { pseen[lp] = 1; pivotVals.push(pv); } });
+      const order = [], groups = {};
+      inT.rows.forEach(r => { const key = gb.map(c => val(inT, r, c)).join(''); if (!groups[key]) { groups[key] = { keyvals: gb.map(c => val(inT, r, c)), rows: [] }; order.push(key); } groups[key].rows.push(r); });
+      const columns = gb.concat(pivotVals);
+      const rows = order.map(key => {
+        const g = groups[key], cells = g.keyvals.slice();
+        pivotVals.forEach(pv => {
+          const matching = g.rows.filter(r => String(val(inT, r, cfg.pivotColumn)).toLowerCase() === pv.toLowerCase());
+          let v = '';
+          if (agg === 'Count') v = matching.length;
+          else if (agg === 'Sum') { const sn = matching.map(r => val(inT, r, cfg.valueColumn)).filter(isNum).map(Number); v = sn.length ? sn.reduce((s, n) => s + n, 0) : ''; }
+          else v = matching.length ? val(inT, matching[0], cfg.valueColumn) : '';
+          cells.push(String(v));
+        });
+        return cells;
+      });
+      return { columns, rows };
+    }
     if (t === 'output.csv' || t === 'output.json') return src('in');
     return { columns: [], rows: [] };
   }
@@ -1686,6 +1784,15 @@ if (typeof module !== 'undefined' && module.exports) {
         const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
         return 'Table.Combine({' + sources.map(ref).join(', ') + '})';
       }
+      case 'transform.unpivot':
+        return 'Table.UnpivotOtherColumns(' + inn() + ', ' + mList(cfg.keep || []) + ', ' + mStr(cfg.attributeName || 'Attribute') + ', ' + mStr(cfg.valueName || 'Value') + ')';
+      case 'transform.pivot': {
+        // Table.Pivot groups by every column that is not the attribute/value column,
+        // so the input should carry only the groupBy + pivot + value columns.
+        const aggm = { Sum: ', each List.Sum(List.Transform(_, each try Number.From(_) otherwise null))', Count: ', each List.Count(_)', First: ', each List.First(_)' }[String(cfg.aggregate || 'First')] || ', each List.First(_)';
+        const pv = 'List.Distinct(List.Transform(Table.Column(' + inn() + ', ' + mStr(cfg.pivotColumn) + '), Text.From))';
+        return 'Table.Pivot(' + inn() + ', ' + pv + ', ' + mStr(cfg.pivotColumn) + ', ' + mStr(cfg.valueColumn) + aggm + ')';
+      }
       case 'output.csv': case 'output.json':
         return inn();   // Power Query has no file-write; the query result is the table
 
@@ -1808,6 +1915,16 @@ const NODE_TYPES = {
     { key: 'find2', label: 'Second marker (between only)', type: 'text' },
     { key: 'as', label: 'Output column (blank = in place)', type: 'text' } ] },
   'transform.union': { name: 'Union / Append', cat: 'transform', inputs: ['in'], fields: [] },
+  'transform.unpivot': { name: 'Unpivot (wide to long)', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'keep', label: 'Keep columns (every other column is unpivoted)', type: 'columns' },
+    { key: 'attributeName', label: 'Attribute column name', type: 'text', placeholder: 'Attribute' },
+    { key: 'valueName', label: 'Value column name', type: 'text', placeholder: 'Value' } ] },
+  'transform.pivot': { name: 'Pivot (long to wide)', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'groupBy', label: 'Group by columns', type: 'columns' },
+    { key: 'pivotColumn', label: 'Pivot column (its values become new columns)', type: 'column' },
+    { key: 'valueColumn', label: 'Value column', type: 'column' },
+    { key: 'aggregate', label: 'Aggregate (when a cell has several values)', type: 'select', default: 'First', options: ['First', 'Sum', 'Count'],
+      hint: 'Pivot output columns depend on the data, so the shell/awk target cannot generate it; use the PowerShell or M (Power Query) target.' } ] },
 
   'output.csv': { name: 'Write Delimited Text', cat: 'output', inputs: ['in'], fields: [
     { key: 'path', label: 'Output path (runtime, on target machine)', type: 'text', placeholder: 'output\\result.csv' },
@@ -1915,6 +2032,7 @@ const NODE_ICONS = {
   'transform.filter': '🔍', 'transform.sort': '↕️', 'transform.distinct': '💠', 'transform.join': '🔗',
   'transform.aggregate': '📊', 'transform.limit': '🔝', 'transform.index': '#️⃣', 'transform.replace': '🔁',
   'transform.fill': '🪣', 'transform.conditional': '🔀', 'transform.text': '🔤', 'transform.union': '📚',
+  'transform.unpivot': '🔃', 'transform.pivot': '🔄',
   'output.csv': '💾', 'output.json': '📦'
 };
 function iconFor(type) { return NODE_ICONS[type] || '•'; }
@@ -2272,6 +2390,8 @@ function outputColumns(id, stack) {
       case 'transform.conditional': res = inc('in').concat(cfg.name ? [cfg.name] : []); break;
       case 'transform.text': res = inc('in').concat(cfg.as ? [cfg.as] : []); break;
       case 'transform.union': { const sn = {}; res = []; (edges || []).filter(e => e.to === id).map(e => e.from).forEach(sid => outputColumns(sid, stack).forEach(c => { if (!sn[c]) { sn[c] = 1; res.push(c); } })); break; }
+      case 'transform.unpivot': res = (cfg.keep || []).concat([cfg.attributeName || 'Attribute', cfg.valueName || 'Value']); break;
+      case 'transform.pivot': res = (cfg.groupBy || []).slice(); break;  // pivot value columns are data-dependent; preview fills them in
       case 'output.csv': case 'output.json': res = inc('in'); break;
     }
   }
