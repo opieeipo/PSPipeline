@@ -163,7 +163,7 @@ PSPipeline/
 - [x] Plain-text formats only: delimited text, fixed-width, JSON (Excel removed by design)
 - [x] Standalone script generation (`ConvertTo-PSPipelineScript`)
 - [x] Designer: palette, canvas, connections, properties, JSON round-trip
-- [x] Data preview in the designer: live sample rows at every node (in-browser preview executor, verified against the PowerShell output) plus column-aware fields, via the browser File API
+- [x] Data preview in the designer: live sample rows at every node (in-browser preview executor, verified against the PowerShell output) plus column-aware fields, via the browser File API. Opening a saved pipeline offers to relink its source files by name in one step, so the field pickers and previews come back without storing any data in the `.json`
 - [x] Friendly form builders for filter/sort/aggregate/rename and column pickers (no more JSON textareas, except the fixed-width column spec)
 - [x] Designer quality-of-life: undo/redo (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) and a read-only input path that the sample picker fills in
 - [x] In-browser standalone script generation (the designer emits the zero-dependency `.ps1` directly)
