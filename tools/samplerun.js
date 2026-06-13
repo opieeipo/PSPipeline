@@ -151,6 +151,25 @@
       });
       return { columns: inT.columns.concat([name]), rows };
     }
+    if (t === 'transform.text') {
+      const inT = src('in'), ci = inT.columns.indexOf(cfg.column);
+      const op = String(cfg.op || 'trim'), a = cfg.find != null ? String(cfg.find) : '', b = cfg.find2 != null ? String(cfg.find2) : '', as = cfg.as ? String(cfg.as) : '';
+      const apply = s => {
+        s = String(s == null ? '' : s);
+        switch (op) {
+          case 'lower': return s.toLowerCase();
+          case 'upper': return s.toUpperCase();
+          case 'title': return s.toLowerCase().split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+          case 'before': { if (a === '') return ''; const i = s.indexOf(a); return i >= 0 ? s.slice(0, i) : ''; }
+          case 'after': { if (a === '') return ''; const i = s.indexOf(a); return i >= 0 ? s.slice(i + a.length) : ''; }
+          case 'between': { if (a === '') return ''; const i = s.indexOf(a); if (i < 0) return ''; const start = i + a.length; if (b === '') return s.slice(start); const j = s.indexOf(b, start); return j >= 0 ? s.slice(start, j) : s.slice(start); }
+          default: return s.trim();
+        }
+      };
+      if (ci < 0 && !as) return { columns: inT.columns.slice(), rows: inT.rows.map(r => r.slice()) };
+      if (as) return { columns: inT.columns.concat([as]), rows: inT.rows.map(r => r.concat([apply(ci >= 0 ? r[ci] : '')])) };
+      return { columns: inT.columns.slice(), rows: inT.rows.map(r => { const nr = r.slice(); nr[ci] = apply(nr[ci]); return nr; }) };
+    }
     if (t === 'transform.join') {
       const L = src('left'), R = src('right'), jt = String(cfg.joinType || 'Inner');
       const lset = {}; L.columns.forEach(c => { lset[c] = 1; });

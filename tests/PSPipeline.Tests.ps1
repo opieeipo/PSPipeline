@@ -136,6 +136,26 @@ Describe 'Conditional column' {
     }
 }
 
+Describe 'Text operations' {
+    BeforeAll {
+        $script:Row = @([pscustomobject]@{ Name = '  ada LOVELACE  '; Email = 'ada@math.org' })
+    }
+    It 'trims surrounding whitespace' {
+        (& $Module { param($d) Edit-PipelineText -Data $d -Column Name -Op trim } $Row)[0].Name | Should -Be 'ada LOVELACE'
+    }
+    It 'title-cases' {
+        $trimmed = & $Module { param($d) Edit-PipelineText -Data $d -Column Name -Op trim } $Row
+        (& $Module { param($d) Edit-PipelineText -Data $d -Column Name -Op title } $trimmed)[0].Name | Should -Be 'Ada Lovelace'
+    }
+    It 'extracts before / after into a new column' {
+        (& $Module { param($d) Edit-PipelineText -Data $d -Column Email -Op before -Find '@' -As User } $Row)[0].User | Should -Be 'ada'
+        (& $Module { param($d) Edit-PipelineText -Data $d -Column Email -Op after -Find '@' -As Domain } $Row)[0].Domain | Should -Be 'math.org'
+    }
+    It 'extracts between two markers' {
+        (& $Module { param($d) Edit-PipelineText -Data $d -Column Email -Op between -Find 'a' -Find2 '@' -As Mid } $Row)[0].Mid | Should -Be 'da'
+    }
+}
+
 Describe 'Sample pipeline end-to-end' {
     It 'runs sample-pipeline.json and writes the report' {
         $repoRoot = Split-Path -Path $PSScriptRoot -Parent
