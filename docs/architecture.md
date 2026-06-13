@@ -61,6 +61,12 @@ re-run whenever any of them change:
 
     pwsh -File tools/Sync-DesignerEngine.ps1
 
+A committed pre-commit hook (`.githooks/pre-commit`) runs this automatically and
+re-stages `designer/index.html` whenever an embedded source is part of a commit, so
+the single-file designer can never drift from its sources. Enable it once per clone:
+
+    git config core.hooksPath .githooks
+
 The CLI cmdlet `ConvertTo-PSPipelineScript` is the PowerShell backend implemented
 server-side (it reads the engine file directly rather than from an embedded copy) and
 produces an equivalent artifact. There is no CLI for the shell target yet; generate it

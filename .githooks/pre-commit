@@ -1,0 +1,25 @@
+#!/bin/sh
+# PSPipeline pre-commit hook.
+# Keeps the single-file designer (designer/index.html) in sync with the engine
+# sources embedded inside it, so they can never drift. If any embedded source is
+# staged, re-run the sync and stage the regenerated index.html into this commit.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+set -e
+
+staged=$(git diff --cached --name-only)
+case "$staged" in
+  *"src/PSPipeline/Core/PipelineFunctions.ps1"*|*"src/PSPipeline/Core/pipeline-runtime.sh"*|*"tools/shellgen.js"*|*"tools/samplerun.js"*) ;;
+  *) exit 0 ;;   # no embedded source staged -> nothing to do
+esac
+
+if command -v pwsh >/dev/null 2>&1; then PS=pwsh
+elif command -v powershell >/dev/null 2>&1; then PS=powershell
+else
+  echo "pre-commit: PowerShell not found; run tools/Sync-DesignerEngine.ps1 and re-stage designer/index.html before committing." >&2
+  exit 1
+fi
+
+"$PS" -NoProfile -ExecutionPolicy Bypass -File tools/Sync-DesignerEngine.ps1 >/dev/null
+git add designer/index.html
+echo "pre-commit: re-synced designer/index.html from embedded engine sources."

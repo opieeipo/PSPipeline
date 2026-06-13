@@ -160,6 +160,13 @@ See `docs/architecture.md` — especially the constraints on
 script, so it must stay 5.1-compatible, dependency-free, and CLM-safe) and the
 five-step checklist for adding a node type.
 
+After cloning, enable the pre-commit hook so the single-file designer stays in
+sync with its embedded sources automatically:
+
+```sh
+git config core.hooksPath .githooks
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
