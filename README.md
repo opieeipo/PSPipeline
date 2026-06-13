@@ -135,6 +135,7 @@ PSPipeline/
 - [x] Designer: palette, canvas, connections, properties, JSON round-trip
 - [x] Data preview in the designer: live sample rows at every node (in-browser preview executor, verified against the PowerShell output) plus column-aware fields, via the browser File API
 - [x] Friendly form builders for filter/sort/aggregate/rename and column pickers (no more JSON textareas, except the fixed-width column spec)
+- [x] Designer quality-of-life: undo/redo (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) and a read-only input path that the sample picker fills in
 - [x] In-browser standalone script generation (the designer emits the zero-dependency `.ps1` directly)
 - [x] Cross-platform code generation: a POSIX `sh` + `awk` backend alongside PowerShell (delimited + fixed-width input, all transforms, delimited output; JSON pending)
 - [ ] PowerShell 7+ performance target: a separate backend using 7-only features (`ForEach-Object -Parallel`, thread jobs) to run independent DAG branches and large inputs concurrently, for less-restricted hosts (opt-in `-Parallel`/`-ThrottleLimit`, order-preserving)
