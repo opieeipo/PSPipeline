@@ -138,11 +138,11 @@ PSPipeline/
 - [x] Designer quality-of-life: undo/redo (Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z) and a read-only input path that the sample picker fills in
 - [x] In-browser standalone script generation (the designer emits the zero-dependency `.ps1` directly)
 - [x] Cross-platform code generation: a POSIX `sh` + `awk` backend alongside PowerShell (delimited + fixed-width input, all transforms, delimited output; JSON pending)
-- [ ] PowerShell 7+ performance target: a separate backend using 7-only features (`ForEach-Object -Parallel`, thread jobs) to run independent DAG branches and large inputs concurrently, for less-restricted hosts (opt-in `-Parallel`/`-ThrottleLimit`, order-preserving)
-- [ ] M / Power Query export backend: compile a pipeline to Power Query M so users can take it into Excel / Power BI (the on-ramp to the Microsoft BI stack, not a rival to it)
-- [ ] Power Query transform-parity track: union/append (incl. folder-of-files), conditional column, text & date functions, pivot/unpivot, type casting, richer aggregations, row ops, column profiling
+- [ ] **M / Power Query export backend** (next priority): compile a pipeline to Power Query M so users can take it into Excel / Power BI (the on-ramp to the Microsoft BI stack, not a rival to it)
+- [ ] **Power Query transform-parity track**: union/append (incl. folder-of-files), conditional column, text & date functions, pivot/unpivot, type casting, richer aggregations, row ops, column profiling
 - [ ] Pipeline-level parameters (e.g. input path prompts at run time)
 - [ ] PowerShell Gallery publication
+- [ ] _Parked / undecided_: PowerShell 7+ parallel target (`ForEach-Object -Parallel` over independent DAG branches). Deprioritized in favor of the M work; may revisit later.
 
 See **[docs/roadmap.md](docs/roadmap.md)** for the full roadmap, the M-export plan, the per-backend feasibility rule, and the explicit non-goals (DAX / interactive modeling stay out of scope).
 

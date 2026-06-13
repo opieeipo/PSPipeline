@@ -14,8 +14,12 @@ Done:
 3. POSIX `sh` + `awk` backend for *nix.
 4. Designer data preview: schema-aware column propagation, live per-node row preview, column-aware field builders, undo/redo, read-only input path.
 
-In progress:
-5. PowerShell 7+ parallel target (`ForEach-Object -Parallel` over independent DAG branches; opt-in, order-preserving).
+Next up (in priority order):
+- M / Power Query export backend (see below) -- the current top priority.
+- The Power Query transform-parity track (see below).
+
+Parked / undecided:
+- PowerShell 7+ parallel target (`ForEach-Object -Parallel` over independent DAG branches; opt-in, order-preserving). Deprioritized in favor of the M work. May revisit if a large-data, less-restricted use case arises and a PowerShell 7 verification environment is available. Not committed.
 
 ## Design rule for everything below
 
