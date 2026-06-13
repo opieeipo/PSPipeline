@@ -83,7 +83,7 @@ The generated script inlines the entire transform engine, embeds the pipeline
 definition as JSON, and exposes exactly one function. That's the whole
 deployment story.
 
-## What it can do today (v0.1 stub)
+## What it can do today
 
 | Category | Nodes |
 | --- | --- |
@@ -94,6 +94,23 @@ deployment story.
 | **Dates / types** | Date (extract year/month/day/ISO-weekday, reformat, whole-day difference; ISO-ish `yyyy-MM-dd` input), Cast (text/number/integer) |
 | **Reshape** | Unpivot (wide to long), Pivot (long to wide; PowerShell + M only, shell declines since its columns are data-dependent) |
 | **Outputs** | Delimited text (any delimiter), JSON |
+
+### Generate targets
+
+The same pipeline compiles to any of these, picked from the designer's **Generate** menu:
+
+| Target | Output | Runs on |
+| --- | --- | --- |
+| **PowerShell** | a standalone `.ps1` function with the engine inlined | Windows PowerShell 5.1+ / PowerShell 7+ |
+| **POSIX shell** | a portable `sh` + `awk` script | any *nix with a POSIX `awk` |
+| **Power Query M** | M code to paste into Excel / Power BI | Excel / Power BI |
+
+A fourth engine, the **in-browser preview executor**, runs every node live in the designer so
+you see each node's output on your own sample data before generating anything. PowerShell,
+shell, and preview are verified byte-for-byte against each other on every node; the M export is
+verified structurally, since it cannot be run without Excel. Where a target genuinely cannot
+express a node it declines with a clear message rather than emit something subtly wrong (for
+example, awk declines pivot because its output columns are data-dependent).
 
 ## Built for hostile environments
 
@@ -141,14 +158,17 @@ PSPipeline/
 - [x] In-browser standalone script generation (the designer emits the zero-dependency `.ps1` directly)
 - [x] Cross-platform code generation: a POSIX `sh` + `awk` backend alongside PowerShell (delimited + fixed-width input, all transforms, delimited output; JSON pending)
 - [x] **M / Power Query export backend** (v1): the "Power Query M" Generate target compiles a pipeline to M for Excel / Power BI (all nodes except fixed-width input; columns export as text). The on-ramp to the Microsoft BI stack, not a rival.
-- [ ] **Power Query transform-parity track**: union/append (incl. folder-of-files), conditional column, text & date functions, pivot/unpivot, type casting, richer aggregations, row ops, column profiling
+- [x] **Power Query transform-parity track**: union/append, conditional column, text functions, date/time + type cast, pivot/unpivot, richer aggregations, row ops, column profiling — all shipped across the engines (awk declines pivot; dates work in awk via a self-implemented day-number)
 - [x] Pipeline-level parameters: declare named params and bind `${Name}` into input/output paths; override at run time via PowerShell function params or shell env vars
-- [ ] PowerShell Gallery publication
-- [ ] _Parked / undecided_: PowerShell 7+ parallel target (`ForEach-Object -Parallel` over independent DAG branches). Deprioritized in favor of the M work; may revisit later.
+- [ ] Parity tails still open: combine-a-folder-of-files, split-into-N-columns, rank aggregation
 
 See **[docs/roadmap.md](docs/roadmap.md)** for the full roadmap, the M-export plan, the per-backend feasibility rule, and the explicit non-goals (DAX / interactive modeling stay out of scope).
 
-## Running the tests
+## Running the tests (optional)
+
+You do not need this to use PSPipeline — the designer and the generated scripts stand on
+their own. The Pester suite is here only if you want to verify the engine yourself or are
+contributing changes. It needs Pester 5:
 
 ```powershell
 Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser   # once
