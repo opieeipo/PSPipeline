@@ -156,6 +156,25 @@ Describe 'Text operations' {
     }
 }
 
+Describe 'Richer aggregations' {
+    It 'computes Median, CountDistinct, and StringJoin' {
+        $data = @(
+            [pscustomobject]@{ G = 'x'; V = '3' }
+            [pscustomobject]@{ G = 'x'; V = '1' }
+            [pscustomobject]@{ G = 'x'; V = '3' }
+        )
+        $aggs = @(
+            [pscustomobject]@{ column = 'V'; function = 'Median';        as = 'M' }
+            [pscustomobject]@{ column = 'V'; function = 'CountDistinct'; as = 'D' }
+            [pscustomobject]@{ column = 'V'; function = 'StringJoin';    as = 'J' }
+        )
+        $r = & $Module { param($d, $a) Group-PipelineData -Data $d -GroupBy @('G') -Aggregations $a } $data $aggs
+        $r[0].M | Should -Be 3
+        $r[0].D | Should -Be 2
+        $r[0].J | Should -Be '3, 1, 3'
+    }
+}
+
 Describe 'Union / append' {
     It 'stacks rows and unions columns in first-appearance order' {
         $a = @([pscustomobject]@{ Id = '1'; Name = 'Ada' })

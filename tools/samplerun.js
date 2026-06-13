@@ -218,6 +218,9 @@
             case 'Average': v = nums.length ? (nums.reduce((s, n) => s + n, 0) / nums.length) : ''; break;
             case 'Min': v = nums.length ? Math.min.apply(null, nums) : ''; break;
             case 'Max': v = nums.length ? Math.max.apply(null, nums) : ''; break;
+            case 'CountDistinct': { const s = {}; g.rows.forEach(r => { s[String(val(inT, r, a.column)).toLowerCase()] = 1; }); v = Object.keys(s).length; break; }
+            case 'StringJoin': v = g.rows.map(r => val(inT, r, a.column)).join(', '); break;
+            case 'Median': { if (!nums.length) { v = ''; break; } const sd = nums.slice().sort((x, y) => x - y); const n = sd.length; v = n % 2 ? sd[(n - 1) / 2] : (sd[n / 2 - 1] + sd[n / 2]) / 2; break; }
           }
           cells.push(String(v));
         });
