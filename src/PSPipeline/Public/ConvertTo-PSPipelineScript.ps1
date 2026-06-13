@@ -33,7 +33,12 @@ function ConvertTo-PSPipelineScript {
         [string]$OutputPath,
 
         [ValidatePattern('^[A-Za-z][A-Za-z0-9-]*$')]
-        [string]$FunctionName = 'Invoke-DataPipeline'
+        [string]$FunctionName = 'Invoke-DataPipeline',
+
+        # Generate a define-only script that does NOT run on its own: it defines the
+        # functions (including the short runner PSGO) so the user runs it deliberately,
+        # e.g. by pasting into a locked-down console and typing PSGO. Default auto-runs.
+        [switch]$NoAutoRun
     )
 
     $json = (Get-Content -Path $Path -Raw).Trim()
@@ -146,13 +151,28 @@ function ConvertTo-PSPipelineScript {
     [void]$lines.Add('#   End embedded engine')
     [void]$lines.Add('# ===========================================================================')
     [void]$lines.Add('')
-    [void]$lines.Add('# Entry point: run the pipeline when this file is executed directly; when it is')
-    [void]$lines.Add('# dot-sourced (". .\' + $FunctionName + '.ps1") only the function above is defined.')
-    [void]$lines.Add('if ($Help) { Get-Help -Name $PSCommandPath -Full; return }')
-    [void]$lines.Add("if (`$MyInvocation.InvocationName -ne '.') {")
-    [void]$lines.Add("    [void]`$PSBoundParameters.Remove('Help')")
-    [void]$lines.Add('    ' + $FunctionName + ' @PSBoundParameters')
-    [void]$lines.Add('}')
+    [void]$lines.Add('# PSGO: a short runner you can call after pasting or dot-sourcing this script --')
+    [void]$lines.Add('# handy in a locked-down shell where executing a .ps1 file is blocked but pasting')
+    [void]$lines.Add('# into the console is not. Takes the same parameters as ' + $FunctionName + '.')
+    [void]$lines.Add('function PSGO { ' + $FunctionName + ' @args }')
+    [void]$lines.Add('')
+    if ($NoAutoRun) {
+        [void]$lines.Add('# Define-only mode: this script does not run on its own. It defines the functions')
+        [void]$lines.Add('# (including PSGO) so you choose when to run -- e.g. paste this whole script into a')
+        [void]$lines.Add('# PowerShell console, then type:  PSGO')
+        [void]$lines.Add('if ($Help) { Get-Help -Name $PSCommandPath -Full; return }')
+        [void]$lines.Add('Write-Host "Pipeline ''' + $pipelineName + ''' loaded. Run it with:  PSGO   (e.g. PSGO -BasePath C:\Data)"')
+    }
+    else {
+        [void]$lines.Add('# Run the pipeline when this file is executed directly; when it is dot-sourced')
+        [void]$lines.Add('# (". .\' + $FunctionName + '.ps1") only the functions above are defined. Either way')
+        [void]$lines.Add('# you can also just call PSGO.')
+        [void]$lines.Add('if ($Help) { Get-Help -Name $PSCommandPath -Full; return }')
+        [void]$lines.Add("if (`$MyInvocation.InvocationName -ne '.') {")
+        [void]$lines.Add("    [void]`$PSBoundParameters.Remove('Help')")
+        [void]$lines.Add('    ' + $FunctionName + ' @PSBoundParameters')
+        [void]$lines.Add('}')
+    }
 
     $scriptText = $lines -join [Environment]::NewLine
 

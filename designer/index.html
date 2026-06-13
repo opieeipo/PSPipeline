@@ -76,6 +76,14 @@
   #modal pre { flex: 1; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 10px; font-size: 11px; }
   #modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
   #modal button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+  #modal button:hover { border-color: var(--accent); }
+  #modal .modal-opt { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+  #modal .modal-opt code { color: var(--accent); }
+  /* Click feedback: a quick press + a colour flash so buttons feel alive. */
+  #toolbar button, #modal button, #zoom-overlay button { transition: transform .07s ease, border-color .12s ease, background .3s ease, color .3s ease; }
+  #toolbar button:active, #modal button:active, #zoom-overlay button:active { transform: translateY(1px) scale(.96); }
+  @keyframes pspl-flash { 0% { background: var(--accent); border-color: var(--accent); color: #fff; } 100% { } }
+  .pspl-flash { animation: pspl-flash .5s ease; }
 
   #props .builder-row { display: flex; gap: 4px; align-items: center; margin: 4px 0; }
   #props .builder-row > select, #props .builder-row > input { width: auto; flex: 1 1 auto; min-width: 40px; }
@@ -173,6 +181,10 @@
 <div id="modal">
   <div class="box">
     <h2 id="modal-title">Generated PowerShell</h2>
+    <label id="modal-autorun-row" class="modal-opt">
+      <input type="checkbox" id="modal-autorun" checked>
+      Run automatically when executed (otherwise it just defines <code>PSGO</code> for you to call)
+    </label>
     <pre id="modal-pre"></pre>
     <div class="row">
       <button id="modal-copy">Copy</button>
@@ -1076,20 +1088,29 @@ function txt_op(s,op,a,b){ if(op=="lower")return tolower(s); if(op=="upper")retu
 // Authored/tested here in Node, then mirrored into designer/index.html as
 // BACKENDS.shell.generate. Pure function of (def, runtimeText) -> script string.
 
-function generateShellScript(def, runtime) {
+function generateShellScript(def, runtime, opts) {
+  const autoRun = !opts || opts.autoRun !== false;   // default: run at the end
   const bad = collectTokenViolations(def);
   if (bad.length) throw new Error('The shell target supports ${parameter} tokens only in input/output paths; found tokens in node(s): ' + bad.join(', ') + '. Use the PowerShell target, or put the parameter in a path.');
   // Layout for a human reader:
   //   header + usage()/--help   ->  shellHeader(def)
   //   engine library (WORK/US/AWKLIB) ->  runtime
   //   parameter env vars        ->  shellParamBlock(def)
-  //   pspl_run(): one awk step per node, then call it
+  //   pspl_run(): one awk step per node; PSGO: short runner; then run (or not)
   const lib = runtime.replace(/^\s+/, '').replace(/\s+$/, '');
   const body = generateShellBody(def);
+  const name = (def && def.name) ? String(def.name) : 'pipeline';
+  const file = name + '.sh';
+  const tail = autoRun
+    ? 'PSGO\n'
+    : 'echo "Pipeline ' + "'" + name + "'" + ' loaded. Source this file then run PSGO:  . ./' + file + ' && PSGO" >&2\n';
   return shellHeader(def) + lib + '\n\n' + shellParamBlock(def)
        + '# --- run the pipeline: one awk step per node ---------------------------------\n'
        + 'pspl_run() {\n' + body + '\n}\n\n'
-       + 'pspl_run\n';
+       + '# PSGO: a short runner. Run this file directly, or source it (. ./' + file + ') and\n'
+       + '# call PSGO -- handy if you cannot or prefer not to execute the file itself.\n'
+       + 'PSGO() { pspl_run; }\n\n'
+       + tail;
 }
 
 // Generated top matter: shebang, a short header, set -eu, a --help usage function,
@@ -2138,7 +2159,8 @@ if (typeof module !== 'undefined' && module.exports) {
 
 function psStr(s) { return String(s == null ? '' : s).replace(/'/g, "''"); }
 
-function buildPowerShellScript(def, engine) {
+function buildPowerShellScript(def, engine, opts) {
+  const autoRun = !opts || opts.autoRun !== false;   // default: run when executed directly
   const fn = 'Invoke-DataPipeline';
   const name = (def && def.name) ? String(def.name) : 'pipeline';
   const json = JSON.stringify(def, null, 2);
@@ -2182,7 +2204,9 @@ function buildPowerShellScript(def, engine) {
     '    or edit it.',
     '',
     '    Run this script directly to execute the pipeline, or dot-source it to load the',
-    '    ' + fn + ' function and call it yourself.',
+    '    ' + fn + ' function and call it yourself. A short runner, PSGO, is also defined:',
+    '    in a locked-down shell where executing a .ps1 is blocked, paste this whole script',
+    '    into a PowerShell console and type PSGO to run it.',
     '.PARAMETER BasePath',
     '    Directory that relative input/output paths resolve against. Defaults to the working directory.'
   ].concat(paramDocs).concat([
@@ -2244,16 +2268,45 @@ function buildPowerShellScript(def, engine) {
     '# ===========================================================================',
     '#   End embedded engine',
     '# ===========================================================================',
-    '',
-    '# Entry point: run the pipeline when this file is executed directly; when it is',
-    '# dot-sourced (". .\\' + fn + '.ps1") only the function above is defined.',
-    'if ($Help) { Get-Help -Name $PSCommandPath -Full; return }',
-    "if ($MyInvocation.InvocationName -ne '.') {",
-    "    [void]$PSBoundParameters.Remove('Help')",
-    '    ' + fn + ' @PSBoundParameters',
-    '}',
     ''
-  ]).join('\n');
+  ]).concat(psgoBlock(fn)).concat(runTail(fn, name, autoRun)).join('\n');
+}
+
+// PSGO -- a short, memorable runner you can call after pasting or dot-sourcing the
+// script. Forwards all arguments to the entry function (PSGO -BasePath C:\Data, etc.).
+function psgoBlock(fn) {
+  return [
+    '# PSGO: a short runner you can call after pasting or dot-sourcing this script --',
+    '# handy in a locked-down shell where executing a .ps1 file is blocked but pasting',
+    '# into the console is not. Takes the same parameters as ' + fn + '.',
+    'function PSGO { ' + fn + ' @args }',
+    ''
+  ];
+}
+
+function runTail(fn, name, autoRun) {
+  if (autoRun) {
+    return [
+      '# Run the pipeline when this file is executed directly; when it is dot-sourced',
+      '# (". .\\' + fn + '.ps1") only the functions above are defined. Either way you',
+      '# can also just call PSGO.',
+      'if ($Help) { Get-Help -Name $PSCommandPath -Full; return }',
+      "if ($MyInvocation.InvocationName -ne '.') {",
+      "    [void]$PSBoundParameters.Remove('Help')",
+      '    ' + fn + ' @PSBoundParameters',
+      '}',
+      ''
+    ];
+  }
+  // Define-only: never runs on its own. Paste/dot-source, then call PSGO.
+  return [
+    '# Define-only mode: this script does not run on its own. It defines the functions',
+    '# (including PSGO) so you choose when to run -- e.g. paste this whole script into a',
+    '# PowerShell console, then type:  PSGO',
+    'if ($Help) { Get-Help -Name $PSCommandPath -Full; return }',
+    'Write-Host "Pipeline ' + "'" + name + "'" + ' loaded. Run it with:  PSGO   (e.g. PSGO -BasePath C:\\Data)"',
+    ''
+  ];
 }
 
 if (typeof module !== 'undefined' && module.exports) module.exports = { buildPowerShellScript };
@@ -3393,25 +3446,27 @@ const BACKENDS = {
     label: 'PowerShell 5.1+ (.ps1)',
     ext: '.ps1',
     available: true,
+    supportsAutoRun: true,
     filename() { return 'Invoke-DataPipeline.ps1'; },
-    generate(def) {
+    generate(def, opts) {
       const engine = psEngineSource();
       if (!engine) throw new Error('The embedded PowerShell engine is missing. Run tools/Sync-DesignerEngine.ps1 to rebuild the designer.');
       if (typeof buildPowerShellScript !== 'function') throw new Error('The PowerShell script builder is missing. Run tools/Sync-DesignerEngine.ps1 to rebuild the designer.');
-      return buildPowerShellScript(def, engine);
+      return buildPowerShellScript(def, engine, opts);
     }
   },
   shell: {
     label: 'POSIX sh + awk (.sh)',
     ext: '.sh',
     available: true,
+    supportsAutoRun: true,
     filename(def) { return (def.name || 'pipeline') + '.sh'; },
-    generate(def) {
+    generate(def, opts) {
       const el = document.getElementById('sh-runtime-source');
       const runtime = (el ? el.textContent : '').replace(/^\n+/, '').replace(/\s+$/, '');
       if (!runtime) throw new Error('The embedded shell runtime is missing. Run tools/Sync-DesignerEngine.ps1 to rebuild the designer.');
       if (typeof generateShellScript !== 'function') throw new Error('The shell generator is missing. Run tools/Sync-DesignerEngine.ps1 to rebuild the designer.');
-      return generateShellScript(def, runtime);
+      return generateShellScript(def, runtime, opts);
     }
   },
   mquery: {
@@ -3457,24 +3512,77 @@ let generated = null;
   }
 })();
 
+let genCtx = null;   // { def, backend } for the open modal, so toggling auto-run regenerates
+function renderGenerated() {
+  if (!genCtx) return;
+  const supports = !!genCtx.backend.supportsAutoRun;
+  document.getElementById('modal-autorun-row').style.display = supports ? '' : 'none';
+  const autoRun = supports ? document.getElementById('modal-autorun').checked : true;
+  let text;
+  try { text = genCtx.backend.generate(genCtx.def, { autoRun }); }
+  catch (err) { alert('Could not generate: ' + err.message); modal.classList.remove('open'); return; }
+  generated = { text, filename: genCtx.backend.filename(genCtx.def) };
+  document.getElementById('modal-title').textContent = 'Generated script (' + genCtx.backend.label + ')';
+  document.getElementById('modal-pre').textContent = text;
+}
 document.getElementById('btn-generate').addEventListener('click', () => {
   const def = toDefinition();
   const issues = validate(def);
   if (issues.length) { alert('Fix these first:\n\n' + issues.join('\n')); return; }
   const backend = BACKENDS[document.getElementById('gen-target').value];
   if (!backend || !backend.available) { alert('That output target is not available yet.'); return; }
-  let text;
-  try { text = backend.generate(def); }
-  catch (err) { alert('Could not generate: ' + err.message); return; }
-  generated = { text, filename: backend.filename(def) };
-  document.getElementById('modal-title').textContent = 'Generated script (' + backend.label + ')';
-  document.getElementById('modal-pre').textContent = text;
-  modal.classList.add('open');
+  genCtx = { def, backend };
+  renderGenerated();
+  if (generated) modal.classList.add('open');
 });
-document.getElementById('modal-close').addEventListener('click', () => modal.classList.remove('open'));
-document.getElementById('modal-copy').addEventListener('click', () =>
-  navigator.clipboard.writeText(generated.text).then(() => setStatus('Copied to clipboard.')));
-document.getElementById('modal-download').addEventListener('click', () => download(generated.filename, generated.text));
+document.getElementById('modal-autorun').addEventListener('change', renderGenerated);
+
+// --- Button click feedback (a press + a colour flash so buttons feel responsive) ---
+function flashButton(btn) {
+  if (!btn) return;
+  btn.classList.remove('pspl-flash');
+  void btn.offsetWidth;          // force reflow so the animation restarts each click
+  btn.classList.add('pspl-flash');
+}
+function pulseLabel(btn, tempText) {
+  if (!btn) return;
+  flashButton(btn);
+  if (btn.dataset.busy) return;  // ignore rapid re-clicks while showing the temp label
+  btn.dataset.busy = '1';
+  const orig = btn.textContent;
+  btn.textContent = tempText;
+  setTimeout(() => { btn.textContent = orig; delete btn.dataset.busy; }, 1100);
+}
+function copyText(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  }
+  return fallbackCopy(text);
+}
+function fallbackCopy(text) {   // works on file:// where the async clipboard API is blocked
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? resolve() : reject(new Error('copy blocked'));
+    } catch (e) { reject(e); }
+  });
+}
+document.getElementById('modal-close').addEventListener('click', () => { genCtx = null; modal.classList.remove('open'); });
+document.getElementById('modal-copy').addEventListener('click', () => {
+  const btn = document.getElementById('modal-copy');
+  copyText(generated.text)
+    .then(() => { pulseLabel(btn, '✓ Copied'); setStatus('Copied to clipboard.'); })
+    .catch(() => { flashButton(btn); setStatus('Copy was blocked; select the text and press Ctrl+C.'); });
+});
+document.getElementById('modal-download').addEventListener('click', () => {
+  download(generated.filename, generated.text);
+  pulseLabel(document.getElementById('modal-download'), '✓ Downloaded');
+  setStatus('Downloaded ' + generated.filename + '.');
+});
 
 document.getElementById('btn-zoom-in').addEventListener('click', () => zoomBy(1.2));
 document.getElementById('btn-zoom-out').addEventListener('click', () => zoomBy(1 / 1.2));

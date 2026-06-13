@@ -86,7 +86,14 @@ Get-Help .\Invoke-DataPipeline.ps1 -Full               # full comment-based help
 The generated script carries comment-based help and a `-Help` switch, exposes one
 entry function (`Invoke-DataPipeline`), and keeps the inlined transform engine in a
 clearly fenced "Embedded engine" region. Run the file to run the pipeline, or
-dot-source it to load the function. That's the whole deployment story.
+dot-source it to load the function.
+
+**Locked-down shells (no execution rights).** Where running a `.ps1` is blocked by
+policy, paste the whole script into a PowerShell console and type **`PSGO`** — a short
+runner defined in every generated script (the shell export has a `PSGO` function too).
+At generation time you can choose whether the script runs automatically when executed
+or just defines `PSGO` for you to call: untick "Run automatically" in the designer's
+generate dialog, or pass `-NoAutoRun` to `ConvertTo-PSPipelineScript`.
 
 ## What it can do today
 
