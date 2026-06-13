@@ -426,6 +426,85 @@ function Convert-PipelinePivot {
     })
 }
 
+# --- Date / type ------------------------------------------------------------
+
+function Get-PipelineDateParts {
+    # Parse an ISO-ish date (yyyy<sep>MM<sep>dd, any non-digit separators, optional
+    # trailing time) into integer Y/M/D. Returns $null if it does not match.
+    param([string]$Value)
+    if ($Value -match '^\s*(\d{4})\D+(\d{1,2})\D+(\d{1,2})') {
+        [pscustomobject]@{ Y = [int]$matches[1]; M = [int]$matches[2]; D = [int]$matches[3] }
+    } else { $null }
+}
+
+function Get-PipelineJdn {
+    # Julian Day Number from a proleptic Gregorian date. Pure integer math so it is
+    # identical across PowerShell, awk, JavaScript, and M.
+    param([int]$Y, [int]$M, [int]$D)
+    $a = [int][math]::Floor((14 - $M) / 12)
+    $y2 = $Y + 4800 - $a
+    $m2 = $M + 12 * $a - 3
+    [int]($D + [int][math]::Floor((153 * $m2 + 2) / 5) + 365 * $y2 + [int][math]::Floor($y2 / 4) - [int][math]::Floor($y2 / 100) + [int][math]::Floor($y2 / 400) - 32045)
+}
+
+function Format-PipelineDate {
+    param([int]$Y, [int]$M, [int]$D, [string]$Format)
+    $yyyy = '{0:D4}' -f $Y; $MM = '{0:D2}' -f $M; $dd = '{0:D2}' -f $D
+    switch ($Format) {
+        'yyyy/MM/dd' { "$yyyy/$MM/$dd" }
+        'MM/dd/yyyy' { "$MM/$dd/$yyyy" }
+        'dd/MM/yyyy' { "$dd/$MM/$yyyy" }
+        'yyyyMMdd'   { "$yyyy$MM$dd" }
+        'yyyy-MM'    { "$yyyy-$MM" }
+        default      { "$yyyy-$MM-$dd" }
+    }
+}
+
+function Convert-PipelineDate {
+    # Extract a component, reformat, or take a day-difference from an ISO-ish date column.
+    param([object[]]$Data, [string]$Column, [string]$Op, [string]$Column2, [string]$Format, [string]$As)
+    $target = if ($As) { $As } else { $Column }
+    @(foreach ($row in $Data) {
+        $p = Get-PipelineDateParts ([string]$row.$Column)
+        $result = if ($null -eq $p) { '' } else {
+            switch ($Op) {
+                'year'    { $p.Y }
+                'month'   { $p.M }
+                'day'     { $p.D }
+                'weekday' { ((Get-PipelineJdn $p.Y $p.M $p.D) % 7) + 1 }  # ISO: Monday=1 .. Sunday=7
+                'format'  { Format-PipelineDate $p.Y $p.M $p.D $Format }
+                'diffdays' {
+                    $p2 = Get-PipelineDateParts ([string]$row.$Column2)
+                    if ($null -eq $p2) { '' } else { (Get-PipelineJdn $p.Y $p.M $p.D) - (Get-PipelineJdn $p2.Y $p2.M $p2.D) }
+                }
+                default { '' }
+            }
+        }
+        $out = [ordered]@{}
+        foreach ($prop in $row.PSObject.Properties) { $out[$prop.Name] = $prop.Value }
+        $out[$target] = $result
+        [pscustomobject]$out
+    })
+}
+
+function Convert-PipelineCast {
+    # Light type normalization (mostly meaningful for the M export's typing).
+    param([object[]]$Data, [string]$Column, [string]$To)
+    @(foreach ($row in $Data) {
+        $v = [string]$row.$Column
+        $n = 0.0
+        $new = switch ($To) {
+            'number'  { if ([double]::TryParse($v, [ref]$n)) { $n } else { $v } }
+            'integer' { if ([double]::TryParse($v, [ref]$n)) { [int][math]::Truncate($n) } else { $v } }
+            default   { $v }
+        }
+        $out = [ordered]@{}
+        foreach ($prop in $row.PSObject.Properties) { $out[$prop.Name] = $prop.Value }
+        $out[$Column] = $new
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -632,6 +711,8 @@ function Invoke-PipelineNode {
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.union'       { Union-PipelineData -Tables $InputList }
+        'transform.date'        { Convert-PipelineDate -Data $Inputs['in'] -Column $config.column -Op $config.op -Column2 $config.column2 -Format $config.format -As $config.as }
+        'transform.cast'        { Convert-PipelineCast -Data $Inputs['in'] -Column $config.column -To $(if ($config.to) { $config.to } else { 'text' }) }
         'transform.unpivot'     { Convert-PipelineUnpivot -Data $Inputs['in'] -Keep @($config.keep) -AttributeName $(if ($config.attributeName) { $config.attributeName } else { 'Attribute' }) -ValueName $(if ($config.valueName) { $config.valueName } else { 'Value' }) }
         'transform.pivot'       { Convert-PipelinePivot -Data $Inputs['in'] -GroupBy @($config.groupBy) -PivotColumn $config.pivotColumn -ValueColumn $config.valueColumn -Aggregate $(if ($config.aggregate) { $config.aggregate } else { 'First' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }

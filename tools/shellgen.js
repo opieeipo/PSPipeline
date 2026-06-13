@@ -270,6 +270,38 @@ function genNode(def, node) {
            + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
       return label + '\n' + awkStep(prog, files, node.id);
     }
+    case 'transform.date': {
+      // Self-implemented JDN + ISO-ish parse so the result is identical to the other engines.
+      const DATEFNS =
+        'function jdn(y,m,d,  a,y2,m2){a=int((14-m)/12);y2=y+4800-a;m2=m+12*a-3;return d+int((153*m2+2)/5)+365*y2+int(y2/4)-int(y2/100)+int(y2/400)-32045}\n' +
+        'function dparse(s,  t,n,arr){t=s;sub(/^[ \\t]+/,"",t);if(t !~ /^[0-9][0-9][0-9][0-9][^0-9]+[0-9]+[^0-9]+[0-9]+/)return 0;n=split(t,arr,/[^0-9]+/);DY=arr[1]+0;DM=arr[2]+0;DD=arr[3]+0;return 1}\n' +
+        'function dfmt(y,m,d,f){if(f=="yyyy/MM/dd")return sprintf("%04d/%02d/%02d",y,m,d);if(f=="MM/dd/yyyy")return sprintf("%02d/%02d/%04d",m,d,y);if(f=="dd/MM/yyyy")return sprintf("%02d/%02d/%04d",d,m,y);if(f=="yyyyMMdd")return sprintf("%04d%02d%02d",y,m,d);if(f=="yyyy-MM")return sprintf("%04d-%02d",y,m);return sprintf("%04d-%02d-%02d",y,m,d)}\n';
+      const dcol = aws(String(cfg.column));
+      const op = String(cfg.op || 'year');
+      const tgt = aws(cfg.as ? String(cfg.as) : String(cfg.column));
+      let setR;
+      switch (op) {
+        case 'month':    setR = 'r=DM;'; break;
+        case 'day':      setR = 'r=DD;'; break;
+        case 'weekday':  setR = 'r=(jdn(DY,DM,DD)%7)+1;'; break;
+        case 'format':   setR = 'r=dfmt(DY,DM,DD,' + aws(String(cfg.format || 'yyyy-MM-dd')) + ');'; break;
+        case 'diffdays': setR = 'jd=jdn(DY,DM,DD); ci2=c[' + aws(String(cfg.column2 || '')) + ']; if(dparse($(ci2))) r=jd-jdn(DY,DM,DD); else r="";'; break;
+        default:         setR = 'r=DY;';
+      }
+      prog = DATEFNS + 'BEGIN{FS=US;OFS=US}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; if(' + tgt + ' in c) print $0; else print $0 OFS ' + tgt + '; next }\n'
+           + '{ ci=c[' + dcol + ']; r=""; if(dparse($(ci))){ ' + setR + ' } ti=(' + tgt + ' in c)?c[' + tgt + ']:0; if(ti){ $(ti)=r; print } else { print $0 OFS r } }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.cast': {
+      const ccol = aws(String(cfg.column));
+      const to = String(cfg.to || 'text');
+      const castBody = to === 'number' ? 'if(is_num(v)) v=v+0;' : (to === 'integer' ? 'if(is_num(v)) v=int(v+0);' : '');
+      prog = 'BEGIN{FS=US;OFS=US;CONVFMT="%.15g";OFMT="%.15g"}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; print; next }\n'
+           + '{ ci=c[' + ccol + ']; if(ci){ v=$(ci); ' + castBody + ' $(ci)=v } print }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
     case 'transform.unpivot': {
       const keepInit = (cfg.keep || []).map(k => 'keep[' + aws(String(k)) + ']=1;').join(' ');
       const attr = aws(String(cfg.attributeName || 'Attribute'));

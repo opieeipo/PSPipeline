@@ -175,6 +175,31 @@ Describe 'Richer aggregations' {
     }
 }
 
+Describe 'Date / cast' {
+    It 'extracts year and ISO weekday, formats, and diffs days' {
+        $data = @(
+            [pscustomobject]@{ Start = '2024-01-15'; End = '2024-03-20' }
+            [pscustomobject]@{ Start = '2024-02-29'; End = '2024-03-01' }
+        )
+        (& $Module { param($d) Convert-PipelineDate -Data $d -Column 'Start' -Op 'year' -As 'Y' } $data)[0].Y | Should -Be 2024
+        $wd = & $Module { param($d) Convert-PipelineDate -Data $d -Column 'Start' -Op 'weekday' -As 'WD' } $data
+        $wd[0].WD | Should -Be 1   # 2024-01-15 is a Monday
+        $wd[1].WD | Should -Be 4   # 2024-02-29 is a Thursday
+        (& $Module { param($d) Convert-PipelineDate -Data $d -Column 'Start' -Op 'format' -Format 'MM/dd/yyyy' -As 'F' } $data)[0].F | Should -Be '01/15/2024'
+        $diff = & $Module { param($d) Convert-PipelineDate -Data $d -Column 'End' -Op 'diffdays' -Column2 'Start' -As 'Days' } $data
+        $diff[1].Days | Should -Be 1   # 2024-03-01 minus 2024-02-29 (leap year)
+    }
+    It 'casts to integer, leaving non-numeric values untouched' {
+        $data = @(
+            [pscustomobject]@{ V = '10.9' }
+            [pscustomobject]@{ V = 'abc'  }
+        )
+        $r = & $Module { param($d) Convert-PipelineCast -Data $d -Column 'V' -To 'integer' } $data
+        $r[0].V | Should -Be 10
+        $r[1].V | Should -Be 'abc'
+    }
+}
+
 Describe 'Unpivot / Pivot' {
     It 'unpivots wide columns into attribute/value rows' {
         $data = @([pscustomobject]@{ Region = 'East'; Q1 = '10'; Q2 = '20' })
