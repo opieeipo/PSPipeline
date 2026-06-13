@@ -260,6 +260,16 @@ function genNode(def, node) {
            + '{ ci=c[' + col + ']; v=(ci?txt_op($ci,' + op + ',' + find + ',' + find2 + '):""); ' + dataLine + ' }';
       return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
     }
+    case 'transform.union': {
+      const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
+      const files = sources.map(s => wf(s)).join(' ');
+      prog = 'BEGIN{FS=US;OFS=US}\n'
+           + 'FNR==1{ fno++; nf[fno]=NF; for(i=1;i<=NF;i++){ hdr[fno,i]=$i; if(!($i in cseen)){ cseen[$i]=1; ucol[++uc]=$i } } next }\n'
+           + '{ rn++; for(i=1;i<=nf[fno];i++) cell[rn,hdr[fno,i]]=$i }\n'
+           + 'END{ line=ucol[1]; for(j=2;j<=uc;j++) line=line OFS ucol[j]; print line; '
+           + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
+      return label + '\n' + awkStep(prog, files, node.id);
+    }
     case 'transform.join': {
       const jt = String(cfg.joinType || 'Inner');
       const right = wf(ins['right']), left = wf(ins['left']);

@@ -66,8 +66,11 @@ Ordered by value to the target persona (non-IT people doing extract/clean work i
 locked-down shops). None of these requires breaking the no-install / CLM-safe / portable
 constraints.
 
-1. **Union / append**, including combine-all-files-in-a-folder. The single most common
-   real task ("merge the 12 monthly extracts"). Highest value.
+1. **Union / append:** DONE -- the `transform.union` node stacks the rows of 2+ inputs
+   (multiple edges into one port) and unions their columns in first-appearance order, with
+   missing cells empty. This also built the multi-input infrastructure across the engine,
+   the awk backend, the preview executor, and the designer's connection rules.
+   **Combine-all-files-in-a-folder is still pending** (a folder input source).
 2. **Conditional column (if/then/else).** DONE -- the `transform.conditional` node: a
    structured ordered-rules node (first matching `condition -> value` wins, with an
    `else`; results support `{Column}` templates), CLM-safe with no code eval.

@@ -156,6 +156,19 @@ Describe 'Text operations' {
     }
 }
 
+Describe 'Union / append' {
+    It 'stacks rows and unions columns in first-appearance order' {
+        $a = @([pscustomobject]@{ Id = '1'; Name = 'Ada' })
+        $b = @([pscustomobject]@{ Id = '2'; Region = 'East' }, [pscustomobject]@{ Id = '3'; Region = 'West' })
+        $r = & $Module { param($x, $y) Union-PipelineData -Tables @($x, $y) } $a $b
+        ($r[0].PSObject.Properties.Name -join ',') | Should -Be 'Id,Name,Region'
+        $r.Count | Should -Be 3
+        $r[0].Region | Should -Be ''
+        $r[1].Name | Should -Be ''
+        $r[1].Region | Should -Be 'East'
+    }
+}
+
 Describe 'Pipeline parameters' {
     It 'resolves declared defaults, overridden by -Parameters' {
         $def = [pscustomobject]@{ parameters = @([pscustomobject]@{ name = 'Tag'; default = 'D' }) }
