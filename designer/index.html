@@ -40,7 +40,8 @@
   .palette-item.cat-transform { border-left-color: var(--transform); }
   .palette-item.cat-output { border-left-color: var(--output); }
 
-  #canvas-wrap { flex: 1; position: relative; overflow: auto; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 24px 24px; }
+  #canvas-area { flex: 1; position: relative; min-width: 0; }
+  #canvas-wrap { position: absolute; inset: 0; overflow: auto; background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 24px 24px; }
   #canvas { position: relative; width: 2400px; height: 1600px; }
   #edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   #edges path { stroke: var(--muted); stroke-width: 2; fill: none; pointer-events: stroke; cursor: pointer; }
@@ -106,17 +107,23 @@
   .pi-icon { flex: 0 0 auto; width: 18px; text-align: center; font-size: 15px; }
   #palette .pal-head { display: flex; justify-content: flex-end; margin-bottom: 6px; }
   #btn-palette-toggle { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; }
-  #palette.compact { width: 52px; padding: 8px 4px; }
-  #palette.compact h2 { display: none; }
-  #palette.compact .pi-label { display: none; }
-  #palette.compact .palette-item { justify-content: center; padding: 8px 0; }
-  #palette.compact .pal-head { justify-content: center; }
+  #palette.collapse { width: 52px; padding: 8px 4px; }
+  #palette.collapse h2 { display: none; }
+  #palette.collapse .pi-label { display: none; }
+  #palette.collapse .palette-item { justify-content: center; padding: 8px 0; }
+  #palette.collapse .pal-head { justify-content: center; }
+  #palette.compress { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; }
+  #palette.compress .pal-head { flex: 0 0 100%; }
+  #palette.compress h2 { flex: 0 0 100%; margin: 6px 4px 2px; }
+  #palette.compress .palette-item { width: 38px; height: 34px; padding: 0; justify-content: center; margin: 0; }
+  #palette.compress .pi-label { display: none; }
   .node .head { display: flex; align-items: center; gap: 6px; cursor: move; }
   .node .head .nh-icon { flex: 0 0 auto; font-size: 13px; }
   .node .body { cursor: move; }
-  #toolbar .tb-zoom { display: flex; align-items: center; gap: 4px; }
-  #toolbar .tb-zoom button { padding: 4px 9px; }
-  #toolbar #zoom-label { font-size: 11px; color: var(--muted); min-width: 40px; text-align: center; }
+  #zoom-overlay { position: absolute; right: 14px; bottom: 14px; z-index: 10; display: flex; align-items: center; gap: 4px; background: rgba(38,43,51,.92); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+  #zoom-overlay button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 4px 9px; border-radius: 4px; cursor: pointer; }
+  #zoom-overlay button:hover { border-color: var(--accent); }
+  #zoom-overlay #zoom-label { font-size: 11px; color: var(--muted); min-width: 40px; text-align: center; }
   .marquee { position: absolute; z-index: 5; border: 1px solid var(--accent); background: rgba(79,156,249,.12); pointer-events: none; }
 
   #status { padding: 4px 12px; font-size: 11px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--line); }
@@ -130,12 +137,6 @@
   <button id="btn-new">New</button>
   <button id="btn-open">Open JSON</button>
   <button id="btn-save">Save JSON</button>
-  <span class="tb-zoom">
-    <button id="btn-zoom-out" title="Zoom out">-</button>
-    <span id="zoom-label">100%</span>
-    <button id="btn-zoom-in" title="Zoom in">+</button>
-    <button id="btn-zoom-fit" title="Fit to view">Fit</button>
-  </span>
   <div class="spacer"></div>
   <select id="gen-target" title="Output target"></select>
   <button id="btn-generate">⚡ Generate</button>
@@ -144,9 +145,17 @@
 
 <div id="main">
   <div id="palette"></div>
-  <div id="canvas-wrap">
-    <div id="canvas">
-      <svg id="edges"></svg>
+  <div id="canvas-area">
+    <div id="canvas-wrap">
+      <div id="canvas">
+        <svg id="edges"></svg>
+      </div>
+    </div>
+    <div id="zoom-overlay">
+      <button id="btn-zoom-out" title="Zoom out">-</button>
+      <span id="zoom-label">100%</span>
+      <button id="btn-zoom-in" title="Zoom in">+</button>
+      <button id="btn-zoom-fit" title="Fit to view">Fit</button>
     </div>
   </div>
   <div id="props"><h2>Properties</h2><div id="props-body"><p class="hint">Select a node to edit it. Tip: drag a .csv / .tsv / .txt / .json file onto the canvas to create an input node.</p></div></div>
@@ -488,6 +497,42 @@ function Add-PipelineConditional {
     })
 }
 
+function Edit-PipelineText {
+    # Single-column text op. Op: trim|lower|upper|title|before|after|between.
+    # before/after/between extract relative to Find (and Find2 for between).
+    # If As is set, the result goes to a new column; otherwise it replaces Column.
+    param([object[]]$Data, [Parameter(Mandatory)][string]$Column, [string]$Op = 'trim',
+          [string]$Find = '', [string]$Find2 = '', [string]$As = '')
+    @(foreach ($row in $Data) {
+        $src = [string]$row.$Column
+        $val = switch ([string]$Op) {
+            'lower' { $src.ToLower() }
+            'upper' { $src.ToUpper() }
+            'title' {
+                $parts = $src.ToLower() -split ' '
+                ($parts | ForEach-Object { if ($_.Length -gt 0) { $_.Substring(0, 1).ToUpper() + $_.Substring(1) } else { $_ } }) -join ' '
+            }
+            'before' { $i = $src.IndexOf($Find); if ($Find -ne '' -and $i -ge 0) { $src.Substring(0, $i) } else { '' } }
+            'after'  { $i = $src.IndexOf($Find); if ($Find -ne '' -and $i -ge 0) { $src.Substring($i + $Find.Length) } else { '' } }
+            'between' {
+                $i = $src.IndexOf($Find)
+                if ($Find -ne '' -and $i -ge 0) {
+                    $start = $i + $Find.Length
+                    $j = if ($Find2 -ne '') { $src.IndexOf($Find2, $start) } else { -1 }
+                    if ($j -ge 0) { $src.Substring($start, $j - $start) } else { $src.Substring($start) }
+                } else { '' }
+            }
+            default { $src.Trim() }
+        }
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) {
+            if (-not $As -and $p.Name -eq $Column) { $out[$p.Name] = $val } else { $out[$p.Name] = $p.Value }
+        }
+        if ($As) { $out[$As] = $val }
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -676,6 +721,7 @@ function Invoke-PipelineNode {
         'transform.replace'     { Edit-PipelineValue -Data $Inputs['in'] -Column $config.column -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -ReplaceWith $(if ($null -ne $config.replaceWith) { [string]$config.replaceWith } else { '' }) -WholeCell:$([bool]$config.wholeCell) }
         'transform.fill'        { Set-PipelineFill -Data $Inputs['in'] -Columns @($config.columns) -Direction $(if ($config.direction) { $config.direction } else { 'Down' }) }
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
+        'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 
@@ -782,6 +828,11 @@ function lit_replace(s, from, to,   out,p,flen){
   while((p=index(s,from))>0){ out=out substr(s,1,p-1) to; s=substr(s,p+flen) }
   return out s
 }
+function txt_before(s,d,  i){ if(d=="")return ""; i=index(s,d); return (i>0)?substr(s,1,i-1):"" }
+function txt_after(s,d,  i){ if(d=="")return ""; i=index(s,d); return (i>0)?substr(s,i+length(d)):"" }
+function txt_between(s,a,b,  i,start,tail,j){ if(a=="")return ""; i=index(s,a); if(i==0)return ""; start=i+length(a); tail=substr(s,start); if(b=="")return tail; j=index(tail,b); return (j>0)?substr(tail,1,j-1):tail }
+function txt_title(s,  n,w,i,out){ n=split(tolower(s),w,/ /); out=""; for(i=1;i<=n;i++){ if(length(w[i])>0) w[i]=toupper(substr(w[i],1,1)) substr(w[i],2); out=out (i>1?" ":"") w[i] } return out }
+function txt_op(s,op,a,b){ if(op=="lower")return tolower(s); if(op=="upper")return toupper(s); if(op=="title")return txt_title(s); if(op=="before")return txt_before(s,a); if(op=="after")return txt_after(s,a); if(op=="between")return txt_between(s,a,b); return trim(s) }
 '
 # --- compiled pipeline body follows ---
 </script><!-- /sh-runtime-source -->
@@ -1003,6 +1054,19 @@ function genNode(def, node) {
       });
       body += 'if(!matched){ res=' + deriveExpr(String(cfg['else'] == null ? '' : cfg['else'])) + ' }\n';
       prog = 'BEGIN{FS=US;OFS=US}\n' + header('print $0 OFS ' + aws(String(cfg.name)) + ';') + '\n{ ' + body + ' print $0 OFS res }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
+    case 'transform.text': {
+      const col = aws(String(cfg.column));
+      const op = aws(String(cfg.op || 'trim'));
+      const find = aws(cfg.find != null ? String(cfg.find) : '');
+      const find2 = aws(cfg.find2 != null ? String(cfg.find2) : '');
+      const as = cfg.as ? String(cfg.as) : '';
+      const headExtra = as ? ('print $0 OFS ' + aws(as) + ';') : 'print;';
+      const dataLine = as ? 'print $0 OFS v' : 'if(ci)$ci=v; print';
+      prog = 'BEGIN{FS=US;OFS=US}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; ' + headExtra + ' next }\n'
+           + '{ ci=c[' + col + ']; v=(ci?txt_op($ci,' + op + ',' + find + ',' + find2 + '):""); ' + dataLine + ' }';
       return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
     }
     case 'transform.join': {
@@ -1234,6 +1298,25 @@ if (typeof module !== 'undefined' && module.exports) {
       });
       return { columns: inT.columns.concat([name]), rows };
     }
+    if (t === 'transform.text') {
+      const inT = src('in'), ci = inT.columns.indexOf(cfg.column);
+      const op = String(cfg.op || 'trim'), a = cfg.find != null ? String(cfg.find) : '', b = cfg.find2 != null ? String(cfg.find2) : '', as = cfg.as ? String(cfg.as) : '';
+      const apply = s => {
+        s = String(s == null ? '' : s);
+        switch (op) {
+          case 'lower': return s.toLowerCase();
+          case 'upper': return s.toUpperCase();
+          case 'title': return s.toLowerCase().split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+          case 'before': { if (a === '') return ''; const i = s.indexOf(a); return i >= 0 ? s.slice(0, i) : ''; }
+          case 'after': { if (a === '') return ''; const i = s.indexOf(a); return i >= 0 ? s.slice(i + a.length) : ''; }
+          case 'between': { if (a === '') return ''; const i = s.indexOf(a); if (i < 0) return ''; const start = i + a.length; if (b === '') return s.slice(start); const j = s.indexOf(b, start); return j >= 0 ? s.slice(start, j) : s.slice(start); }
+          default: return s.trim();
+        }
+      };
+      if (ci < 0 && !as) return { columns: inT.columns.slice(), rows: inT.rows.map(r => r.slice()) };
+      if (as) return { columns: inT.columns.concat([as]), rows: inT.rows.map(r => r.concat([apply(ci >= 0 ? r[ci] : '')])) };
+      return { columns: inT.columns.slice(), rows: inT.rows.map(r => { const nr = r.slice(); nr[ci] = apply(nr[ci]); return nr; }) };
+    }
     if (t === 'transform.join') {
       const L = src('left'), R = src('right'), jt = String(cfg.joinType || 'Inner');
       const lset = {}; L.columns.forEach(c => { lset[c] = 1; });
@@ -1372,6 +1455,12 @@ const NODE_TYPES = {
     { key: 'rules', label: 'Rules (first match wins)', type: 'rules', addLabel: '+ rule',
       hint: 'Each rule: column, operator, value, then the result. Results may use {Column} placeholders.' },
     { key: 'else', label: 'Otherwise (default value)', type: 'text' } ] },
+  'transform.text': { name: 'Text', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'column', label: 'Column', type: 'column' },
+    { key: 'op', label: 'Operation', type: 'select', default: 'trim', options: ['trim', 'lower', 'upper', 'title', 'before', 'after', 'between'] },
+    { key: 'find', label: 'Marker (before / after / between)', type: 'text' },
+    { key: 'find2', label: 'Second marker (between only)', type: 'text' },
+    { key: 'as', label: 'Output column (blank = in place)', type: 'text' } ] },
 
   'output.csv': { name: 'Write Delimited Text', cat: 'output', inputs: ['in'], fields: [
     { key: 'path', label: 'Output path (runtime, on target machine)', type: 'text', placeholder: 'output\\result.csv' },
@@ -1477,7 +1566,7 @@ const NODE_ICONS = {
   'transform.select': '🎯', 'transform.drop': '🗑️', 'transform.rename': '🏷️', 'transform.derive': '✨',
   'transform.filter': '🔍', 'transform.sort': '↕️', 'transform.distinct': '💠', 'transform.join': '🔗',
   'transform.aggregate': '📊', 'transform.limit': '🔝', 'transform.index': '#️⃣', 'transform.replace': '🔁',
-  'transform.fill': '🪣', 'transform.conditional': '🔀',
+  'transform.fill': '🪣', 'transform.conditional': '🔀', 'transform.text': '🔤',
   'output.csv': '💾', 'output.json': '📦'
 };
 function iconFor(type) { return NODE_ICONS[type] || '•'; }
@@ -1491,11 +1580,15 @@ function togglePreview() {
   document.getElementById('preview-toggle').textContent = previewCollapsed ? '▸' : '▾';
   if (!previewCollapsed) renderPreviewPanel(previewNode);
 }
-let paletteCompact = false;
-function togglePalette() {
-  paletteCompact = !paletteCompact;
-  document.getElementById('palette').classList.toggle('compact', paletteCompact);
-  const b = document.getElementById('btn-palette-toggle'); if (b) b.textContent = paletteCompact ? '»' : '« Collapse';
+const PALETTE_MODES = ['expanded', 'compress', 'collapse'];
+let paletteMode = 'expanded';
+function cyclePalette() {
+  paletteMode = PALETTE_MODES[(PALETTE_MODES.indexOf(paletteMode) + 1) % PALETTE_MODES.length];
+  const pal = document.getElementById('palette');
+  pal.classList.remove('compress', 'collapse');
+  if (paletteMode !== 'expanded') pal.classList.add(paletteMode);
+  const b = document.getElementById('btn-palette-toggle');
+  if (b) b.textContent = paletteMode === 'collapse' ? '»' : (paletteMode === 'compress' ? 'Compress' : 'Expanded');
 }
 
 // --- Palette ---------------------------------------------------------------
@@ -1503,8 +1596,8 @@ function togglePalette() {
   const palette = document.getElementById('palette');
   const palHead = document.createElement('div'); palHead.className = 'pal-head';
   const toggle = document.createElement('button'); toggle.id = 'btn-palette-toggle';
-  toggle.textContent = '« Collapse'; toggle.title = 'Toggle compact / expanded palette';
-  toggle.addEventListener('click', togglePalette);
+  toggle.textContent = 'Expanded'; toggle.title = 'Cycle palette view: Expanded / Compress / Collapse';
+  toggle.addEventListener('click', cyclePalette);
   palHead.appendChild(toggle); palette.appendChild(palHead);
   const groups = { input: 'Inputs', transform: 'Transforms', output: 'Outputs' };
   for (const [cat, title] of Object.entries(groups)) {
@@ -1797,6 +1890,7 @@ function outputColumns(id, stack) {
       case 'transform.limit': case 'transform.replace': case 'transform.fill': res = inc('in'); break;
       case 'transform.index': res = inc('in').concat([cfg.name || 'Index']); break;
       case 'transform.conditional': res = inc('in').concat(cfg.name ? [cfg.name] : []); break;
+      case 'transform.text': res = inc('in').concat(cfg.as ? [cfg.as] : []); break;
       case 'output.csv': case 'output.json': res = inc('in'); break;
     }
   }

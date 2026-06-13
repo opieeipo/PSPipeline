@@ -310,6 +310,42 @@ function Add-PipelineConditional {
     })
 }
 
+function Edit-PipelineText {
+    # Single-column text op. Op: trim|lower|upper|title|before|after|between.
+    # before/after/between extract relative to Find (and Find2 for between).
+    # If As is set, the result goes to a new column; otherwise it replaces Column.
+    param([object[]]$Data, [Parameter(Mandatory)][string]$Column, [string]$Op = 'trim',
+          [string]$Find = '', [string]$Find2 = '', [string]$As = '')
+    @(foreach ($row in $Data) {
+        $src = [string]$row.$Column
+        $val = switch ([string]$Op) {
+            'lower' { $src.ToLower() }
+            'upper' { $src.ToUpper() }
+            'title' {
+                $parts = $src.ToLower() -split ' '
+                ($parts | ForEach-Object { if ($_.Length -gt 0) { $_.Substring(0, 1).ToUpper() + $_.Substring(1) } else { $_ } }) -join ' '
+            }
+            'before' { $i = $src.IndexOf($Find); if ($Find -ne '' -and $i -ge 0) { $src.Substring(0, $i) } else { '' } }
+            'after'  { $i = $src.IndexOf($Find); if ($Find -ne '' -and $i -ge 0) { $src.Substring($i + $Find.Length) } else { '' } }
+            'between' {
+                $i = $src.IndexOf($Find)
+                if ($Find -ne '' -and $i -ge 0) {
+                    $start = $i + $Find.Length
+                    $j = if ($Find2 -ne '') { $src.IndexOf($Find2, $start) } else { -1 }
+                    if ($j -ge 0) { $src.Substring($start, $j - $start) } else { $src.Substring($start) }
+                } else { '' }
+            }
+            default { $src.Trim() }
+        }
+        $out = [ordered]@{}
+        foreach ($p in $row.PSObject.Properties) {
+            if (-not $As -and $p.Name -eq $Column) { $out[$p.Name] = $val } else { $out[$p.Name] = $p.Value }
+        }
+        if ($As) { $out[$As] = $val }
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -498,6 +534,7 @@ function Invoke-PipelineNode {
         'transform.replace'     { Edit-PipelineValue -Data $Inputs['in'] -Column $config.column -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -ReplaceWith $(if ($null -ne $config.replaceWith) { [string]$config.replaceWith } else { '' }) -WholeCell:$([bool]$config.wholeCell) }
         'transform.fill'        { Set-PipelineFill -Data $Inputs['in'] -Columns @($config.columns) -Direction $(if ($config.direction) { $config.direction } else { 'Down' }) }
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
+        'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.join'      { Join-PipelineData -Left $Inputs['left'] -Right $Inputs['right'] -LeftKey $config.leftKey -RightKey $config.rightKey -JoinType $config.joinType }
         'transform.aggregate' { Group-PipelineData -Data $Inputs['in'] -GroupBy @($config.groupBy) -Aggregations @($config.aggregations) }
 

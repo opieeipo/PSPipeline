@@ -45,5 +45,10 @@ function lit_replace(s, from, to,   out,p,flen){
   while((p=index(s,from))>0){ out=out substr(s,1,p-1) to; s=substr(s,p+flen) }
   return out s
 }
+function txt_before(s,d,  i){ if(d=="")return ""; i=index(s,d); return (i>0)?substr(s,1,i-1):"" }
+function txt_after(s,d,  i){ if(d=="")return ""; i=index(s,d); return (i>0)?substr(s,i+length(d)):"" }
+function txt_between(s,a,b,  i,start,tail,j){ if(a=="")return ""; i=index(s,a); if(i==0)return ""; start=i+length(a); tail=substr(s,start); if(b=="")return tail; j=index(tail,b); return (j>0)?substr(tail,1,j-1):tail }
+function txt_title(s,  n,w,i,out){ n=split(tolower(s),w,/ /); out=""; for(i=1;i<=n;i++){ if(length(w[i])>0) w[i]=toupper(substr(w[i],1,1)) substr(w[i],2); out=out (i>1?" ":"") w[i] } return out }
+function txt_op(s,op,a,b){ if(op=="lower")return tolower(s); if(op=="upper")return toupper(s); if(op=="title")return txt_title(s); if(op=="before")return txt_before(s,a); if(op=="after")return txt_after(s,a); if(op=="between")return txt_between(s,a,b); return trim(s) }
 '
 # --- compiled pipeline body follows ---

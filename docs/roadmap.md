@@ -71,8 +71,10 @@ constraints.
 2. **Conditional column (if/then/else).** DONE -- the `transform.conditional` node: a
    structured ordered-rules node (first matching `condition -> value` wins, with an
    `else`; results support `{Column}` templates), CLM-safe with no code eval.
-3. **Text functions:** split (by delimiter/position), extract (before/after/between),
-   trim/clean, change case, merge columns.
+3. **Text functions:** DONE except split -- the `transform.text` node (trim, lower / upper /
+   title case, extract before / after / between, optional target column). Merge-columns is
+   covered by the derive node's `{Column}` templates. **Split-into-N-columns still pending**
+   (its column count is data-dependent).
 4. **Date/time functions** + a light type layer: parse, format, extract
    (year/month/day/weekday), difference. Turns "reshape" into "actually clean."
 5. **Pivot / unpivot** (long <-> wide). Common in reporting. (Hard in awk; likely starts

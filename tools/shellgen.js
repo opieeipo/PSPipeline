@@ -217,6 +217,19 @@ function genNode(def, node) {
       prog = 'BEGIN{FS=US;OFS=US}\n' + header('print $0 OFS ' + aws(String(cfg.name)) + ';') + '\n{ ' + body + ' print $0 OFS res }';
       return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
     }
+    case 'transform.text': {
+      const col = aws(String(cfg.column));
+      const op = aws(String(cfg.op || 'trim'));
+      const find = aws(cfg.find != null ? String(cfg.find) : '');
+      const find2 = aws(cfg.find2 != null ? String(cfg.find2) : '');
+      const as = cfg.as ? String(cfg.as) : '';
+      const headExtra = as ? ('print $0 OFS ' + aws(as) + ';') : 'print;';
+      const dataLine = as ? 'print $0 OFS v' : 'if(ci)$ci=v; print';
+      prog = 'BEGIN{FS=US;OFS=US}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; ' + headExtra + ' next }\n'
+           + '{ ci=c[' + col + ']; v=(ci?txt_op($ci,' + op + ',' + find + ',' + find2 + '):""); ' + dataLine + ' }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
     case 'transform.join': {
       const jt = String(cfg.joinType || 'Inner');
       const right = wf(ins['right']), left = wf(ins['left']);
