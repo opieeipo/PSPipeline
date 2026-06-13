@@ -3,20 +3,29 @@
 // Authored/tested here in Node, then mirrored into designer/index.html as
 // BACKENDS.shell.generate. Pure function of (def, runtimeText) -> script string.
 
-function generateShellScript(def, runtime) {
+function generateShellScript(def, runtime, opts) {
+  const autoRun = !opts || opts.autoRun !== false;   // default: run at the end
   const bad = collectTokenViolations(def);
   if (bad.length) throw new Error('The shell target supports ${parameter} tokens only in input/output paths; found tokens in node(s): ' + bad.join(', ') + '. Use the PowerShell target, or put the parameter in a path.');
   // Layout for a human reader:
   //   header + usage()/--help   ->  shellHeader(def)
   //   engine library (WORK/US/AWKLIB) ->  runtime
   //   parameter env vars        ->  shellParamBlock(def)
-  //   pspl_run(): one awk step per node, then call it
+  //   pspl_run(): one awk step per node; PSGO: short runner; then run (or not)
   const lib = runtime.replace(/^\s+/, '').replace(/\s+$/, '');
   const body = generateShellBody(def);
+  const name = (def && def.name) ? String(def.name) : 'pipeline';
+  const file = name + '.sh';
+  const tail = autoRun
+    ? 'PSGO\n'
+    : 'echo "Pipeline ' + "'" + name + "'" + ' loaded. Source this file then run PSGO:  . ./' + file + ' && PSGO" >&2\n';
   return shellHeader(def) + lib + '\n\n' + shellParamBlock(def)
        + '# --- run the pipeline: one awk step per node ---------------------------------\n'
        + 'pspl_run() {\n' + body + '\n}\n\n'
-       + 'pspl_run\n';
+       + '# PSGO: a short runner. Run this file directly, or source it (. ./' + file + ') and\n'
+       + '# call PSGO -- handy if you cannot or prefer not to execute the file itself.\n'
+       + 'PSGO() { pspl_run; }\n\n'
+       + tail;
 }
 
 // Generated top matter: shebang, a short header, set -eu, a --help usage function,

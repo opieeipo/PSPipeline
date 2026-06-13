@@ -312,4 +312,13 @@ Describe 'ConvertTo-PSPipelineScript' {
         $genText | Should -Match 'End embedded engine'
         $genText | Should -Match "if \(\`$MyInvocation\.InvocationName -ne '\.'\)"
     }
+    It 'defines the PSGO runner' {
+        $genText | Should -Match 'function PSGO'
+    }
+    It 'auto-runs by default but is define-only with -NoAutoRun' {
+        $defineOnly = ConvertTo-PSPipelineScript -Path (Join-Path $repoRoot2 'samples/sample-pipeline.json') -NoAutoRun
+        $defineOnly | Should -Match 'function PSGO'
+        $defineOnly | Should -Not -Match "if \(\`$MyInvocation\.InvocationName -ne '\.'\)"
+        $defineOnly | Should -Match 'Run it with:  PSGO'
+    }
 }

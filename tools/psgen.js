@@ -13,7 +13,8 @@
 
 function psStr(s) { return String(s == null ? '' : s).replace(/'/g, "''"); }
 
-function buildPowerShellScript(def, engine) {
+function buildPowerShellScript(def, engine, opts) {
+  const autoRun = !opts || opts.autoRun !== false;   // default: run when executed directly
   const fn = 'Invoke-DataPipeline';
   const name = (def && def.name) ? String(def.name) : 'pipeline';
   const json = JSON.stringify(def, null, 2);
@@ -57,7 +58,9 @@ function buildPowerShellScript(def, engine) {
     '    or edit it.',
     '',
     '    Run this script directly to execute the pipeline, or dot-source it to load the',
-    '    ' + fn + ' function and call it yourself.',
+    '    ' + fn + ' function and call it yourself. A short runner, PSGO, is also defined:',
+    '    in a locked-down shell where executing a .ps1 is blocked, paste this whole script',
+    '    into a PowerShell console and type PSGO to run it.',
     '.PARAMETER BasePath',
     '    Directory that relative input/output paths resolve against. Defaults to the working directory.'
   ].concat(paramDocs).concat([
@@ -119,16 +122,45 @@ function buildPowerShellScript(def, engine) {
     '# ===========================================================================',
     '#   End embedded engine',
     '# ===========================================================================',
-    '',
-    '# Entry point: run the pipeline when this file is executed directly; when it is',
-    '# dot-sourced (". .\\' + fn + '.ps1") only the function above is defined.',
-    'if ($Help) { Get-Help -Name $PSCommandPath -Full; return }',
-    "if ($MyInvocation.InvocationName -ne '.') {",
-    "    [void]$PSBoundParameters.Remove('Help')",
-    '    ' + fn + ' @PSBoundParameters',
-    '}',
     ''
-  ]).join('\n');
+  ]).concat(psgoBlock(fn)).concat(runTail(fn, name, autoRun)).join('\n');
+}
+
+// PSGO -- a short, memorable runner you can call after pasting or dot-sourcing the
+// script. Forwards all arguments to the entry function (PSGO -BasePath C:\Data, etc.).
+function psgoBlock(fn) {
+  return [
+    '# PSGO: a short runner you can call after pasting or dot-sourcing this script --',
+    '# handy in a locked-down shell where executing a .ps1 file is blocked but pasting',
+    '# into the console is not. Takes the same parameters as ' + fn + '.',
+    'function PSGO { ' + fn + ' @args }',
+    ''
+  ];
+}
+
+function runTail(fn, name, autoRun) {
+  if (autoRun) {
+    return [
+      '# Run the pipeline when this file is executed directly; when it is dot-sourced',
+      '# (". .\\' + fn + '.ps1") only the functions above are defined. Either way you',
+      '# can also just call PSGO.',
+      'if ($Help) { Get-Help -Name $PSCommandPath -Full; return }',
+      "if ($MyInvocation.InvocationName -ne '.') {",
+      "    [void]$PSBoundParameters.Remove('Help')",
+      '    ' + fn + ' @PSBoundParameters',
+      '}',
+      ''
+    ];
+  }
+  // Define-only: never runs on its own. Paste/dot-source, then call PSGO.
+  return [
+    '# Define-only mode: this script does not run on its own. It defines the functions',
+    '# (including PSGO) so you choose when to run -- e.g. paste this whole script into a',
+    '# PowerShell console, then type:  PSGO',
+    'if ($Help) { Get-Help -Name $PSCommandPath -Full; return }',
+    'Write-Host "Pipeline ' + "'" + name + "'" + ' loaded. Run it with:  PSGO   (e.g. PSGO -BasePath C:\\Data)"',
+    ''
+  ];
 }
 
 if (typeof module !== 'undefined' && module.exports) module.exports = { buildPowerShellScript };
