@@ -141,6 +141,9 @@
             case 'Average': fn = 'each List.Average(' + mNumCol(a.column) + ')'; break;
             case 'Min': fn = 'each List.Min(' + mNumCol(a.column) + ')'; break;
             case 'Max': fn = 'each List.Max(' + mNumCol(a.column) + ')'; break;
+            case 'Median': fn = 'each List.Median(' + mNumCol(a.column) + ')'; break;
+            case 'CountDistinct': fn = 'each List.Count(List.Distinct(List.Transform(Table.Column(_, ' + mStr(a.column) + '), Text.Lower)))'; break;
+            case 'StringJoin': fn = 'each Text.Combine(List.Transform(Table.Column(_, ' + mStr(a.column) + '), Text.From), ", ")'; break;
             default: fn = 'each null';
           }
           return '{' + mStr(as) + ', ' + fn + ', type any}';

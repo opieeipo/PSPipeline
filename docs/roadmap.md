@@ -88,8 +88,10 @@ constraints.
    (year/month/day/weekday), difference. Turns "reshape" into "actually clean."
 5. **Pivot / unpivot** (long <-> wide). Common in reporting. (Hard in awk; likely starts
    PowerShell- and M-only.)
-6. **Type casting** + richer aggregations: count-distinct, median/percentile, string-join
-   (group-and-concatenate).
+6. **Richer aggregations** DONE -- Median, CountDistinct (case-insensitive), and StringJoin
+   added to the aggregate node across all engines (PS/awk/preview/M), verified byte-equal.
+   **Type casting still pending** (a light number/date normalize node, mainly useful for the
+   M export's typing).
 7. **Row operations:** DONE except rank -- `transform.limit` (top-N / bottom-N / row range),
    `transform.index`, `transform.replace`, `transform.fill` (down/up). **Rank still pending**
    (its cross-engine tie-ordering parity is the one fiddly bit).

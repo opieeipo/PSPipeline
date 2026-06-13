@@ -438,7 +438,7 @@ function Join-PipelineData {
 
 function Group-PipelineData {
     # $Aggregations is an array of objects with .column, .function and optional .as
-    # Functions: Count, Sum, Average, Min, Max, First
+    # Functions: Count, Sum, Average, Min, Max, First, Median, CountDistinct, StringJoin
     param(
         [object[]]$Data,
         [string[]]$GroupBy,
@@ -453,6 +453,12 @@ function Group-PipelineData {
             $out[$name] = switch ([string]$agg.function) {
                 'Count' { $group.Count }
                 'First' { $first.($agg.column) }
+                'CountDistinct' {
+                    $seen = @{}
+                    foreach ($row in $group.Group) { $seen[[string]$row.($agg.column)] = $true }
+                    $seen.Count
+                }
+                'StringJoin' { (@(foreach ($row in $group.Group) { [string]$row.($agg.column) })) -join ', ' }
                 default {
                     # Numeric aggregations: ignore rows where the value doesn't parse
                     # (e.g. nulls introduced by an outer join).
@@ -465,6 +471,13 @@ function Group-PipelineData {
                         'Average' { ($numbers | Measure-Object -Average).Average }
                         'Min'     { ($numbers | Measure-Object -Minimum).Minimum }
                         'Max'     { ($numbers | Measure-Object -Maximum).Maximum }
+                        'Median'  {
+                            $sorted = @($numbers | Sort-Object)
+                            $c = $sorted.Count
+                            if ($c -eq 0) { '' }
+                            elseif ($c % 2 -eq 1) { $sorted[[int](($c - 1) / 2)] }
+                            else { ($sorted[$c / 2 - 1] + $sorted[$c / 2]) / 2 }
+                        }
                         default   { throw "Unknown aggregate function '$($agg.function)'." }
                     }
                 }

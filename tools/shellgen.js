@@ -288,11 +288,17 @@ function genNode(def, node) {
       const saveG = gb.map((g, i) => 'g' + i + '[key]=' + col(g)).join('; ');
       const headOut = gb.map(aws).concat(aggs.map(a => aws(String(a.as || (a.function + '_' + a.column))))).join(' OFS ');
       // accumulators
-      let acc = '';
+      let acc = '', medFns = '';
       aggs.forEach((a, i) => {
         const f = col(a.column), fn = String(a.function);
         if (fn === 'Count') acc += '';
         else if (fn === 'First') acc += 'if(!(key in cnt)) first' + i + '[key]=' + f + '; ';
+        else if (fn === 'CountDistinct') acc += '{ dk=key SUBSEP tolower(' + f + '); if(!(dk in dseen' + i + ')){ dseen' + i + '[dk]=1; dc' + i + '[key]++ } } ';
+        else if (fn === 'StringJoin') acc += '{ if(key in sj' + i + ') sj' + i + '[key]=sj' + i + '[key] ", " ' + f + '; else sj' + i + '[key]=' + f + ' } ';
+        else if (fn === 'Median') {
+          acc += 'if(is_num(' + f + ')) mv' + i + '[key, ++mn' + i + '[key]]=' + f + '+0; ';
+          medFns += 'function med' + i + '(k,  a,n,j,p,t){ n=mn' + i + '[k]+0; for(j=1;j<=n;j++) a[j]=mv' + i + '[k,j]; for(p=2;p<=n;p++){ t=a[p]; j=p-1; while(j>=1 && a[j]>t){ a[j+1]=a[j]; j-- } a[j+1]=t } if(n==0) return ""; if(n%2==1) return a[int((n+1)/2)]; return (a[int(n/2)]+a[int(n/2)+1])/2 }\n';
+        }
         else acc += 'if(is_num(' + f + ')){ v=' + f + '+0; if(!(key in nseen' + i + ')){ nseen' + i + '[key]=1; s' + i + '[key]=v; mn' + i + '[key]=v; mx' + i + '[key]=v; sc' + i + '[key]=1 } else { s' + i + '[key]+=v; if(v<mn' + i + '[key])mn' + i + '[key]=v; if(v>mx' + i + '[key])mx' + i + '[key]=v; sc' + i + '[key]++ } } ';
       });
       let outFields = gb.map((g, i) => 'g' + i + '[k]');
@@ -304,9 +310,12 @@ function genNode(def, node) {
         else if (fn === 'Min') outFields.push('((k in mn' + i + ')?mn' + i + '[k]:"")');
         else if (fn === 'Max') outFields.push('((k in mx' + i + ')?mx' + i + '[k]:"")');
         else if (fn === 'First') outFields.push('first' + i + '[k]');
+        else if (fn === 'CountDistinct') outFields.push('(k in dc' + i + '?dc' + i + '[k]:0)');
+        else if (fn === 'StringJoin') outFields.push('(k in sj' + i + '?sj' + i + '[k]:"")');
+        else if (fn === 'Median') outFields.push('med' + i + '(k)');
         else throw new Error("Unknown aggregate function '" + a.function + "'.");
       });
-      prog = 'BEGIN{FS=US;OFS=US}\n'
+      prog = medFns + 'BEGIN{FS=US;OFS=US}\n'
            + 'NR==1{ for(i=1;i<=NF;i++)c[$i]=i; print ' + headOut + '; next }\n'
            + '{ key=' + keyExpr + '; if(!(key in cnt0)){ cnt0[key]=1; order[++no]=key; ' + saveG + ' } '
            + acc + ' cnt[key]++ }\n'
