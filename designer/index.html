@@ -2033,10 +2033,9 @@ function renderNodes() {
       const p = document.createElement('div');
       p.className = 'port out' + (pendingFrom === node.id ? ' armed' : '');
       el.appendChild(p);
-      // Stop mousedown here: otherwise it bubbles to the node's select handler,
-      // which re-renders every node and destroys this port before the click lands.
-      p.addEventListener('mousedown', ev => ev.stopPropagation());
-      p.addEventListener('click', ev => { ev.stopPropagation(); startEdge(node.id); });
+      // Output port supports BOTH click-to-arm and drag-to-connect. stopPropagation
+      // keeps the node's select/drag handler from firing when interacting with the port.
+      p.addEventListener('mousedown', ev => { ev.stopPropagation(); ev.preventDefault(); beginLink(node.id, ev); });
     }
 
     el.addEventListener('mousedown', ev => handleNodeMouseDown(node, ev));
@@ -2106,6 +2105,35 @@ function finishEdge(toId, toPort) {
   pendingFrom = null;
   renderAll();
   setStatus('Connected.');
+}
+
+// Drag-to-connect: press an output port and drag a live link to an input port.
+// A plain press-release (no movement) falls back to click-to-arm.
+function beginLink(fromId, ev) {
+  const a = portPosition(fromId, 'out');
+  let moved = false;
+  const temp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  temp.setAttribute('class', 'pending');
+  edgesSvg.appendChild(temp);
+  function mm(e) {
+    moved = true;
+    const c = toCanvas(e.clientX, e.clientY);
+    const dx = Math.max(40, Math.abs(c.x - a.x) / 2);
+    temp.setAttribute('d', 'M ' + a.x + ' ' + a.y + ' C ' + (a.x + dx) + ' ' + a.y + ', ' + (c.x - dx) + ' ' + c.y + ', ' + c.x + ' ' + c.y);
+  }
+  function mu(e) {
+    document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu);
+    temp.remove();
+    if (!moved) { startEdge(fromId); return; }   // plain click on the output port arms it
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    if (el && el.classList.contains('port') && el.classList.contains('in')) {
+      const nodeEl = el.closest('.node');
+      const toId = nodeEl && nodeEl.dataset.id;
+      if (toId) { pendingFrom = fromId; finishEdge(toId, el.dataset.port || 'in'); return; }
+    }
+    pendingFrom = null; renderNodes(); setStatus('Link cancelled.');
+  }
+  document.addEventListener('mousemove', mm); document.addEventListener('mouseup', mu);
 }
 
 // --- Node dragging --------------------------------------------------------------
