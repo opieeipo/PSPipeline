@@ -175,6 +175,15 @@ Describe 'Richer aggregations' {
     }
 }
 
+Describe 'Reorder columns' {
+    It 'moves listed columns to the front, keeping the rest in original order' {
+        $data = @([pscustomobject]@{ A = '1'; B = '2'; C = '3'; D = '4' })
+        $r = & $Module { param($d) Select-PipelineColumnOrder -Data $d -Order @('C', 'A') } $data
+        (($r[0].PSObject.Properties.Name) -join ',') | Should -Be 'C,A,B,D'
+        $r[0].C | Should -Be '3'
+    }
+}
+
 Describe 'Date / cast' {
     It 'extracts year and ISO weekday, formats, and diffs days' {
         $data = @(

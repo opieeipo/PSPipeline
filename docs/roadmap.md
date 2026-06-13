@@ -72,6 +72,7 @@ Most nodes map almost directly:
 | `input.json` | `Json.Document` |
 | `transform.select` / `drop` | `Table.SelectColumns` / `Table.RemoveColumns` |
 | `transform.rename` | `Table.RenameColumns` |
+| `transform.reorder` | `Table.ReorderColumns` |
 | `transform.derive` | `Table.AddColumn` |
 | `transform.filter` | `Table.SelectRows` |
 | `transform.sort` | `Table.Sort` |

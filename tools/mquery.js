@@ -154,6 +154,9 @@
         const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
         return 'Table.Combine({' + sources.map(ref).join(', ') + '})';
       }
+      case 'transform.reorder':
+        // Listed columns first (in order), the rest keep their original order after.
+        return 'Table.ReorderColumns(' + inn() + ', ' + mList(cfg.order || []) + ', MissingField.Ignore)';
       case 'transform.date': {
         const op = String(cfg.op || 'year');
         const dx = r0 => 'Date.From(' + r0 + ')';

@@ -270,6 +270,17 @@ function genNode(def, node) {
            + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
       return label + '\n' + awkStep(prog, files, node.id);
     }
+    case 'transform.reorder': {
+      const order = (cfg.order || []).map(String);
+      const ordInit = order.map((o, i) => 'ord[' + (i + 1) + ']=' + aws(o) + ';').join(' ');
+      prog = 'BEGIN{FS=US;OFS=US; no=' + order.length + '; ' + ordInit + '}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++){ c[$i]=i; nm[i]=$i } k=0;'
+           + ' for(j=1;j<=no;j++){ if((ord[j] in c) && !(ord[j] in used)){ used[ord[j]]=1; sel[++k]=c[ord[j]] } }'
+           + ' for(i=1;i<=NF;i++){ if(!(nm[i] in used)){ used[nm[i]]=1; sel[++k]=i } }'
+           + ' nsel=k; h=""; for(i=1;i<=k;i++) h=h (i>1?OFS:"") nm[sel[i]]; print h; next }\n'
+           + '{ o=""; for(i=1;i<=nsel;i++) o=o (i>1?OFS:"") $(sel[i]); print o }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
     case 'transform.date': {
       // Self-implemented JDN + ISO-ish parse so the result is identical to the other engines.
       const DATEFNS =

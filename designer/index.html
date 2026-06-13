@@ -692,6 +692,22 @@ function Convert-PipelineCast {
     })
 }
 
+function Select-PipelineColumnOrder {
+    # Reorder columns without dropping any. Listed columns come first in the given
+    # order; any input columns not listed are appended in their original order.
+    param([object[]]$Data, [string[]]$Order)
+    $rows = @($Data); if ($rows.Count -eq 0) { return @() }
+    $all = @($rows[0].PSObject.Properties.Name)
+    $final = New-Object System.Collections.ArrayList
+    foreach ($c in $Order) { if (($all -contains $c) -and ($final -notcontains $c)) { [void]$final.Add($c) } }
+    foreach ($c in $all) { if ($final -notcontains $c) { [void]$final.Add($c) } }
+    @(foreach ($row in $rows) {
+        $out = [ordered]@{}
+        foreach ($c in $final) { $out[$c] = $row.$c }
+        [pscustomobject]$out
+    })
+}
+
 # --- Join ------------------------------------------------------------------
 
 function Merge-PipelineRow {
@@ -898,6 +914,7 @@ function Invoke-PipelineNode {
         'transform.conditional' { Add-PipelineConditional -Data $Inputs['in'] -Name $config.name -Rules @($config.rules) -Else $(if ($null -ne $config.'else') { [string]$config.'else' } else { '' }) }
         'transform.text'        { Edit-PipelineText -Data $Inputs['in'] -Column $config.column -Op $(if ($config.op) { $config.op } else { 'trim' }) -Find $(if ($null -ne $config.find) { [string]$config.find } else { '' }) -Find2 $(if ($null -ne $config.find2) { [string]$config.find2 } else { '' }) -As $(if ($config.as) { [string]$config.as } else { '' }) }
         'transform.union'       { Union-PipelineData -Tables $InputList }
+        'transform.reorder'     { Select-PipelineColumnOrder -Data $Inputs['in'] -Order @($config.order) }
         'transform.date'        { Convert-PipelineDate -Data $Inputs['in'] -Column $config.column -Op $config.op -Column2 $config.column2 -Format $config.format -As $config.as }
         'transform.cast'        { Convert-PipelineCast -Data $Inputs['in'] -Column $config.column -To $(if ($config.to) { $config.to } else { 'text' }) }
         'transform.unpivot'     { Convert-PipelineUnpivot -Data $Inputs['in'] -Keep @($config.keep) -AttributeName $(if ($config.attributeName) { $config.attributeName } else { 'Attribute' }) -ValueName $(if ($config.valueName) { $config.valueName } else { 'Value' }) }
@@ -1329,6 +1346,17 @@ function genNode(def, node) {
            + 'for(r=1;r<=rn;r++){ out=""; for(j=1;j<=uc;j++){ k=r SUBSEP ucol[j]; v=(k in cell)?cell[k]:""; out=out (j>1?OFS:"") v } print out } }';
       return label + '\n' + awkStep(prog, files, node.id);
     }
+    case 'transform.reorder': {
+      const order = (cfg.order || []).map(String);
+      const ordInit = order.map((o, i) => 'ord[' + (i + 1) + ']=' + aws(o) + ';').join(' ');
+      prog = 'BEGIN{FS=US;OFS=US; no=' + order.length + '; ' + ordInit + '}\n'
+           + 'NR==1{ for(i=1;i<=NF;i++){ c[$i]=i; nm[i]=$i } k=0;'
+           + ' for(j=1;j<=no;j++){ if((ord[j] in c) && !(ord[j] in used)){ used[ord[j]]=1; sel[++k]=c[ord[j]] } }'
+           + ' for(i=1;i<=NF;i++){ if(!(nm[i] in used)){ used[nm[i]]=1; sel[++k]=i } }'
+           + ' nsel=k; h=""; for(i=1;i<=k;i++) h=h (i>1?OFS:"") nm[sel[i]]; print h; next }\n'
+           + '{ o=""; for(i=1;i<=nsel;i++) o=o (i>1?OFS:"") $(sel[i]); print o }';
+      return label + '\n' + awkStep(prog, wf(ins['in']), node.id);
+    }
     case 'transform.date': {
       // Self-implemented JDN + ISO-ish parse so the result is identical to the other engines.
       const DATEFNS =
@@ -1702,6 +1730,14 @@ if (typeof module !== 'undefined' && module.exports) {
       });
       return { columns, rows };
     }
+    if (t === 'transform.reorder') {
+      const inT = src('in'), order = (cfg.order || []).map(String), final = [];
+      order.forEach(c => { if (inT.columns.indexOf(c) >= 0 && final.indexOf(c) < 0) final.push(c); });
+      inT.columns.forEach(c => { if (final.indexOf(c) < 0) final.push(c); });
+      const idx = final.map(c => inT.columns.indexOf(c));
+      const rows = inT.rows.map(r => idx.map(i => (r[i] == null ? '' : r[i])));
+      return { columns: final, rows };
+    }
     if (t === 'transform.date') {
       const inT = src('in'), col = cfg.column, op = String(cfg.op || 'year'), tgt = cfg.as || col;
       const columns = inT.columns.indexOf(tgt) >= 0 ? inT.columns.slice() : inT.columns.concat([tgt]);
@@ -1946,6 +1982,9 @@ if (typeof module !== 'undefined' && module.exports) {
         const sources = (def.edges || []).filter(e => e.to === node.id).map(e => e.from);
         return 'Table.Combine({' + sources.map(ref).join(', ') + '})';
       }
+      case 'transform.reorder':
+        // Listed columns first (in order), the rest keep their original order after.
+        return 'Table.ReorderColumns(' + inn() + ', ' + mList(cfg.order || []) + ', MissingField.Ignore)';
       case 'transform.date': {
         const op = String(cfg.op || 'year');
         const dx = r0 => 'Date.From(' + r0 + ')';
@@ -2053,6 +2092,9 @@ const NODE_TYPES = {
     { key: 'columns', label: 'Columns to remove', type: 'columns' } ] },
   'transform.rename': { name: 'Rename Columns', cat: 'transform', inputs: ['in'], fields: [
     { key: 'renames', label: 'Renames', type: 'renames', addLabel: '+ rename' } ] },
+  'transform.reorder': { name: 'Reorder Columns', cat: 'transform', inputs: ['in'], fields: [
+    { key: 'order', label: 'Column order (use the arrows)', type: 'reorder',
+      hint: 'Reorders columns without dropping any. Columns present at run time but not listed here are appended in their original order.' } ] },
   'transform.derive': { name: 'Derived Column', cat: 'transform', inputs: ['in'], fields: [
     { key: 'name', label: 'New column name', type: 'text' },
     { key: 'template', label: 'Template, e.g. {First} {Last}', type: 'text',
@@ -2224,7 +2266,7 @@ function toCanvas(clientX, clientY) {
 // --- Node icons -------------------------------------------------------------
 const NODE_ICONS = {
   'input.csv': '📄', 'input.fixedwidth': '📐', 'input.json': '🗂️',
-  'transform.select': '🎯', 'transform.drop': '🗑️', 'transform.rename': '🏷️', 'transform.derive': '✨',
+  'transform.select': '🎯', 'transform.drop': '🗑️', 'transform.rename': '🏷️', 'transform.reorder': '↔️', 'transform.derive': '✨',
   'transform.filter': '🔍', 'transform.sort': '↕️', 'transform.distinct': '💠', 'transform.join': '🔗',
   'transform.aggregate': '📊', 'transform.limit': '🔝', 'transform.index': '#️⃣', 'transform.replace': '🔁',
   'transform.fill': '🪣', 'transform.conditional': '🔀', 'transform.text': '🔤', 'transform.union': '📚',
@@ -2300,8 +2342,15 @@ canvas.parentElement.addEventListener('drop', e => {
       n.config.path = file.name;
       n.label = file.name;
       if (ext === 'tsv' || ext === 'tab') n.config.delimiter = '\t';
-      renderAll(); selectNode(n.id);
-      setStatus('Added input for "' + file.name + '" — set its full path in the properties panel.');
+      // Load the dropped file as sample data immediately so preview works without
+      // a second manual pick.
+      loadSampleIntoNode(n, file).then(parsed => {
+        renderAll(); selectNode(n.id);
+        setStatus('Loaded ' + parsed.rows.length + ' sample rows from "' + file.name + '". Set its full runtime path in the properties panel.');
+      }).catch(err => {
+        renderAll(); selectNode(n.id);
+        setStatus('Added input for "' + file.name + '"; sample could not be parsed (' + err.message + ').');
+      });
     }
   }
 });
@@ -2577,6 +2626,7 @@ function outputColumns(id, stack) {
       case 'transform.select': res = (cfg.columns || []).slice(); break;
       case 'transform.drop': { const d = cfg.columns || []; res = inc('in').filter(c => d.indexOf(c) < 0); break; }
       case 'transform.rename': { const m = {}; (cfg.renames || []).forEach(r => { m[r.from] = r.to; }); res = inc('in').map(c => m[c] || c); break; }
+      case 'transform.reorder': { const c = inc('in'); const ord = (cfg.order || []).filter(x => c.indexOf(x) >= 0); res = ord.concat(c.filter(x => ord.indexOf(x) < 0)); break; }
       case 'transform.derive': res = inc('in').concat(cfg.name ? [cfg.name] : []); break;
       case 'transform.filter': case 'transform.sort': case 'transform.distinct': res = inc('in'); break;
       case 'transform.join': { const l = inc('left'), r = inc('right'); const ls = {}; l.forEach(c => { ls[c] = 1; }); res = l.concat(r.map(c => ls[c] ? 'Right_' + c : c)); break; }
@@ -2684,6 +2734,38 @@ function renderColumnField(box, node, field, columns) {
   const label = document.createElement('label'); label.textContent = field.label; box.appendChild(label);
   box.appendChild(colInput(node.config[field.key], columns, v => { node.config[field.key] = v; renderNodes(); }));
 }
+function renderReorder(box, node, field, columns) {
+  const label = document.createElement('label'); label.textContent = field.label; box.appendChild(label);
+  if (!columns || !columns.length) {
+    const cur = node.config[field.key] || [];
+    addField(box, '', 'text', cur.join(', '), v => { node.config[field.key] = v.split(',').map(s => s.trim()).filter(Boolean); renderNodes(); }, 'comma separated; load a sample to use the arrows');
+    if (field.hint) addHint(box, field.hint);
+    return;
+  }
+  // Effective order: stored order (still present) first, then any new input columns appended.
+  const stored = (node.config[field.key] || []).slice();
+  const ordered = stored.filter(c => columns.indexOf(c) >= 0);
+  columns.forEach(c => { if (ordered.indexOf(c) < 0) ordered.push(c); });
+  node.config[field.key] = ordered.slice();   // persist the full order so codegen reorders
+  const wrap = document.createElement('div'); wrap.className = 'chk';
+  function move(i, d) {
+    const arr = node.config[field.key].slice();
+    const j = i + d; if (j < 0 || j >= arr.length) return;
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    snapshotState(); node.config[field.key] = arr; renderProps(); renderNodes();
+  }
+  ordered.forEach((c, i) => {
+    const row = document.createElement('div'); row.className = 'builder-row';
+    const up = document.createElement('button'); up.className = 'builder-rm'; up.textContent = '▲'; up.title = 'move up'; up.disabled = (i === 0);
+    up.addEventListener('click', () => move(i, -1));
+    const dn = document.createElement('button'); dn.className = 'builder-rm'; dn.textContent = '▼'; dn.title = 'move down'; dn.disabled = (i === ordered.length - 1);
+    dn.addEventListener('click', () => move(i, 1));
+    const nm = document.createElement('span'); nm.textContent = ' ' + c; nm.style.flex = '1';
+    row.appendChild(up); row.appendChild(dn); row.appendChild(nm); wrap.appendChild(row);
+  });
+  box.appendChild(wrap);
+  if (field.hint) addHint(box, field.hint);
+}
 function builderScaffold(box, node, field, columns, makeRow, makeNew) {
   const label = document.createElement('label'); label.textContent = field.label; box.appendChild(label);
   if (!Array.isArray(node.config[field.key])) node.config[field.key] = [];
@@ -2773,24 +2855,30 @@ function renderRenames(box, node, field, columns) {
 }
 
 // --- Sample loader + preview ------------------------------------------------
+// Read a dropped or picked file into the node's sample data. Shared by the
+// properties-panel picker and the canvas drag-and-drop so both behave identically
+// (the drop path used to set the path but never load the sample, so preview stayed empty).
+function loadSampleIntoNode(node, file) {
+  return file.text().then(text => {
+    let parsed;
+    if (node.type === 'input.fixedwidth') parsed = parseFixedSample(text, node.config.columns || [], parseInt(node.config.skipLines || 0, 10));
+    else if (node.type === 'input.json') parsed = parseJsonSample(text);
+    else parsed = parseDelimitedSample(text, node.config.delimiter || ',');
+    sampleData[node.id] = parsed;
+    node.config.path = file.name;   // the read-only path field mirrors the picked file
+    return parsed;
+  });
+}
 function renderSampleLoader(box, node) {
   const label = document.createElement('label'); label.textContent = 'Sample data (preview only, not saved)'; box.appendChild(label);
   const f = document.createElement('input'); f.type = 'file';
   f.accept = node.type === 'input.json' ? '.json' : '.csv,.tsv,.txt';
   f.addEventListener('change', () => {
     const file = f.files && f.files[0]; if (!file) return;
-    file.text().then(text => {
-      try {
-        let parsed;
-        if (node.type === 'input.csv') parsed = parseDelimitedSample(text, node.config.delimiter || ',');
-        else if (node.type === 'input.fixedwidth') parsed = parseFixedSample(text, node.config.columns || [], parseInt(node.config.skipLines || 0, 10));
-        else parsed = parseJsonSample(text);
-        sampleData[node.id] = parsed;
-        node.config.path = file.name;   // the read-only path field mirrors the picked file
-        setStatus('Loaded ' + parsed.rows.length + ' sample rows, ' + parsed.columns.length + ' columns from ' + file.name + '.');
-        renderProps(); renderNodes();
-      } catch (err) { setStatus('Could not parse sample: ' + err.message); }
-    });
+    loadSampleIntoNode(node, file).then(parsed => {
+      setStatus('Loaded ' + parsed.rows.length + ' sample rows, ' + parsed.columns.length + ' columns from ' + file.name + '.');
+      renderProps(); renderNodes();
+    }).catch(err => setStatus('Could not parse sample: ' + err.message));
   });
   box.appendChild(f);
   addHint(box, 'Preview only, never saved. Seeds the runtime path above if it is empty.');
@@ -2903,6 +2991,8 @@ function renderProps() {
     const current = node.config[field.key];
     if (field.type === 'columns') {
       renderColumns(box, node, field, inCols);
+    } else if (field.type === 'reorder') {
+      renderReorder(box, node, field, inCols);
     } else if (field.type === 'column') {
       renderColumnField(box, node, field, inputColumns(node, field.port || 'in'));
     } else if (field.type === 'conditions') {

@@ -32,7 +32,7 @@
             "type": "string",
             "enum": [
               "input.csv", "input.fixedwidth", "input.json",
-              "transform.select", "transform.drop", "transform.rename",
+              "transform.select", "transform.drop", "transform.rename", "transform.reorder",
               "transform.derive", "transform.filter", "transform.sort",
               "transform.distinct", "transform.join", "transform.aggregate",
               "transform.limit", "transform.index", "transform.replace",

@@ -88,7 +88,7 @@ deployment story.
 | Category | Nodes |
 | --- | --- |
 | **Inputs** | Delimited text (CSV, TSV, pipe, any delimiter, flat `.txt`), Fixed-width, JSON |
-| **Column ops** | Select, Drop, Rename, Derived column (`{First} {Last}` templates), Conditional column (ordered if/then rules), Text (trim, case, extract before/after/between) |
+| **Column ops** | Select, Drop, Rename, Reorder (move columns), Derived column (`{First} {Last}` templates), Conditional column (ordered if/then rules), Text (trim, case, extract before/after/between) |
 | **Row ops** | Filter (eq, ne, gt, ge, lt, le, contains, startswith, endswith, isempty, isnotempty; All/Any), Sort, Distinct, Limit (top/bottom/range), Add index, Replace values, Fill down/up |
 | **Combine** | **Join (Inner, Left, Right, Full outer)** (hash join, key-collision-safe), Union/Append (stack 2+ inputs, column-aligned), Aggregate (Count, Sum, Average, Min, Max, First, Median, CountDistinct, StringJoin with Group By) |
 | **Dates / types** | Date (extract year/month/day/ISO-weekday, reformat, whole-day difference; ISO-ish `yyyy-MM-dd` input), Cast (text/number/integer) |

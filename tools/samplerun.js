@@ -242,6 +242,14 @@
       });
       return { columns, rows };
     }
+    if (t === 'transform.reorder') {
+      const inT = src('in'), order = (cfg.order || []).map(String), final = [];
+      order.forEach(c => { if (inT.columns.indexOf(c) >= 0 && final.indexOf(c) < 0) final.push(c); });
+      inT.columns.forEach(c => { if (final.indexOf(c) < 0) final.push(c); });
+      const idx = final.map(c => inT.columns.indexOf(c));
+      const rows = inT.rows.map(r => idx.map(i => (r[i] == null ? '' : r[i])));
+      return { columns: final, rows };
+    }
     if (t === 'transform.date') {
       const inT = src('in'), col = cfg.column, op = String(cfg.op || 'year'), tgt = cfg.as || col;
       const columns = inT.columns.indexOf(tgt) >= 0 ? inT.columns.slice() : inT.columns.concat([tgt]);
