@@ -86,6 +86,51 @@ constraints.
 9. **Pipeline-level parameters:** prompt for input/output paths (or values) at run time in
    the generated script.
 
+### Level of effort and sequencing
+
+LOE is driven less by transform logic (most is simple) than by a structural tax: each new
+node is implemented in **three engines** (PowerShell, awk via `shellgen.js`, and the
+`samplerun.js` preview) plus the designer node, schema, `outputColumns` propagation, and
+tests -- and **four** once the M backend exists. Sizes below are for a focused dev who knows
+this codebase, relative to the phases already shipped (S = a fraction of a session, M = about
+half to one session, L = one or more sessions).
+
+| # | Item | Size | Main cost / risk | awk feasibility |
+|---|------|------|------------------|-----------------|
+| 1 | Union / append (+ folder) | M-L | New **variable-arity input ports** in the designer (canvas/connection infra; ports are fixed today). Folder = multi-file read. | OK (header-union); folder = shell loop |
+| 2 | Conditional column | M | A **nested rules-builder UI** (conditions inside rules); logic reuses existing condition eval. | OK (reuse `condExpr`) |
+| 3 | Text functions | M-L (group) | Many small nodes; **split-into-N-columns** has a data-dependent column count. | OK |
+| 4 | Date/time + light type layer | L | **Cross-engine date-format parity is the hardest correctness problem in the track**; type layer is cross-cutting. | Hard (no POSIX date) -> likely PS + M only |
+| 5 | Pivot / unpivot | M (unpivot) + L (pivot) | Pivot output columns are **data-dependent** (runtime discovery). | unpivot OK; pivot hard -> PS + M only |
+| 6 | Type cast + richer aggregations | M | median/percentile need in-group sort; mostly extends the aggregate node. | moderate |
+| 7 | Row operations | M (a bag of S's) | Each is small/easy; volume is the cost. | OK |
+| 8 | Designer column profiling | S-M | Designer/preview only, **no backend codegen**. | n/a |
+| 9 | Pipeline-level parameters | M | Cross-cutting: every backend's wrapper + a designer binding UI. | moderate |
+
+Two things that change the math:
+
+- **The M backend is a verification cliff.** M output cannot be runtime-verified in this
+  environment (no Excel / Power Query engine), exactly like the parked PS7 target. PowerShell,
+  awk, and preview get diffed against the oracle; M can only be syntax-shaped until it is run
+  in Excel/Power BI. Do not couple parity tightly to M before accepting that.
+- **Data-dependent columns** (split-into-N, pivot) are the recurring hard case: when output
+  columns depend on the data, static schema propagation and the downstream column-aware
+  dropdowns degrade, and the backends must discover columns at runtime.
+
+Suggested sequencing by value-to-effort:
+
+- **Quick wins first:** #8 profiling (designer-only), the trim/case/clean subset of #3, and
+  #7 row ops.
+- **High value, do the infra once:** #1 union/append (the variable-arity-port work unblocks
+  all future multi-input nodes), then #2 conditional column.
+- **Defer / treat as their own mini-projects:** #4 dates+types and #5 pivot; #9 parameters is
+  orthogonal and can land anytime.
+
+Rollup: the full track roughly doubles the node count across multiple backends, so in total
+it is on the order of everything built so far -- about **6-10 focused sessions** at current
+pace, but cleanly phaseable and front-loadable with the quick wins. The single highest-leverage
+first slice is **union/append plus the variable-arity port infrastructure**.
+
 ## Explicitly out of scope
 
 - **DAX and the interactive analytical model** -- measures, `CALCULATE`, evaluation
