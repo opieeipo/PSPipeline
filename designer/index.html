@@ -137,10 +137,12 @@
   <button id="btn-new">New</button>
   <button id="btn-open">Open JSON</button>
   <button id="btn-save">Save JSON</button>
+  <button id="btn-relink" title="Re-read the source files referenced by the loaded pipeline, matched by filename">Relink sources</button>
   <div class="spacer"></div>
   <select id="gen-target" title="Output target"></select>
   <button id="btn-generate">⚡ Generate</button>
   <input type="file" id="file-open" accept=".json" hidden>
+  <input type="file" id="file-relink" accept=".csv,.tsv,.txt,.json" multiple hidden>
 </div>
 
 <div id="main">
@@ -3052,14 +3054,16 @@ function renderRenames(box, node, field, columns) {
 // Read a dropped or picked file into the node's sample data. Shared by the
 // properties-panel picker and the canvas drag-and-drop so both behave identically
 // (the drop path used to set the path but never load the sample, so preview stayed empty).
-function loadSampleIntoNode(node, file) {
+function loadSampleIntoNode(node, file, keepPath) {
   return file.text().then(text => {
     let parsed;
     if (node.type === 'input.fixedwidth') parsed = parseFixedSample(text, node.config.columns || [], parseInt(node.config.skipLines || 0, 10));
     else if (node.type === 'input.json') parsed = parseJsonSample(text);
     else parsed = parseDelimitedSample(text, node.config.delimiter || ',');
     sampleData[node.id] = parsed;
-    node.config.path = file.name;   // the read-only path field mirrors the picked file
+    // The picker/drop seed the read-only path from the picked file; relink keeps the
+    // pipeline's existing runtime path and only refreshes the in-memory sample.
+    if (!keepPath) node.config.path = file.name;
     return parsed;
   });
 }
@@ -3286,6 +3290,59 @@ function loadDefinition(def) {
   pipelineParams = (def.parameters || []).filter(p => p && p.name);
   selectedNode = null; selectedEdge = null; pendingFrom = null;
   renderAll(); renderProps();
+  // The pipeline file stores no data, so previews/field pickers need the real source
+  // files re-read. Offer to relink them by name in one step (browsers can't auto-read
+  // a saved path; this is the one click that grants access). Per-node pickers also work.
+  promptRelinkSources();
+}
+
+// Input nodes whose source file we could re-read by matching its filename.
+function relinkableInputs() {
+  return nodes.filter(n =>
+    (n.type === 'input.csv' || n.type === 'input.json' || n.type === 'input.fixedwidth') &&
+    baseName(n.config && n.config.path) &&
+    !(sampleData[n.id] && sampleData[n.id].rows && sampleData[n.id].rows.length));
+}
+function baseName(p) {
+  if (!p) return '';
+  const b = String(p).split(/[\\/]/).pop();
+  return /\$\{[A-Za-z0-9_]+\}/.test(b) ? '' : b;   // parameterized paths can't be matched by name
+}
+function promptRelinkSources() {
+  const need = relinkableInputs();
+  if (!need.length) return;
+  const names = [...new Set(need.map(n => baseName(n.config.path)))];
+  if (confirm('This pipeline references ' + names.length + ' source file' + (names.length > 1 ? 's' : '') +
+      ' (' + names.join(', ') + ').\n\nLocate them now to refresh the column pickers and previews?')) {
+    document.getElementById('file-relink').click();   // confirm() gives the gesture the picker needs
+  } else {
+    setStatus('Loaded. Use "Relink sources" (or a node\'s sample picker) when you want field pickers and previews.');
+  }
+}
+// Re-read picked files into the matching input nodes by filename.
+function relinkSources(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const byName = {};
+  nodes.forEach(n => {
+    if (n.type === 'input.csv' || n.type === 'input.json' || n.type === 'input.fixedwidth') {
+      const b = baseName(n.config && n.config.path);
+      if (b) (byName[b.toLowerCase()] = byName[b.toLowerCase()] || []).push(n);
+    }
+  });
+  let matched = 0, unmatched = [];
+  const jobs = [];
+  files.forEach(file => {
+    const targets = byName[file.name.toLowerCase()];
+    if (!targets) { unmatched.push(file.name); return; }
+    targets.forEach(n => { matched++; jobs.push(loadSampleIntoNode(n, file, true)); });
+  });
+  Promise.all(jobs).then(() => {
+    renderAll(); renderProps();
+    let msg = 'Relinked ' + matched + ' input' + (matched === 1 ? '' : 's') + '.';
+    if (unmatched.length) msg += ' No node matched: ' + unmatched.join(', ') + '.';
+    setStatus(msg);
+  }).catch(err => setStatus('Relink failed: ' + err.message));
 }
 
 function download(filename, text) {
@@ -3310,6 +3367,11 @@ document.getElementById('file-open').addEventListener('change', e => {
   const file = e.target.files[0];
   if (!file) return;
   file.text().then(text => loadDefinition(JSON.parse(text))).catch(err => alert('Could not load: ' + err.message));
+  e.target.value = '';
+});
+document.getElementById('btn-relink').addEventListener('click', () => document.getElementById('file-relink').click());
+document.getElementById('file-relink').addEventListener('change', e => {
+  relinkSources(e.target.files);
   e.target.value = '';
 });
 
