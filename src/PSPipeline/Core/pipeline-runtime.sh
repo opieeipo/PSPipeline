@@ -1,8 +1,7 @@
-#!/bin/sh
 # ---------------------------------------------------------------------------
 # PSPipeline shell runtime -- the *nix analog of Core/PipelineFunctions.ps1.
-# Inlined verbatim at the top of every generated POSIX sh + awk script, then
-# followed by a compiled body that chains one awk step per pipeline node.
+# Inlined into every generated POSIX sh + awk script as its engine library
+# (after the generated header/usage, before the compiled pipeline body).
 #
 # Hard constraints (mirror the PowerShell engine's):
 #   * POSIX sh + POSIX awk only -- no bash-isms, no gawk extensions, so it runs
@@ -13,14 +12,10 @@
 #
 # String comparisons are case-insensitive to match the PowerShell engine
 # (PowerShell -eq/-lt/-like and Sort-Object are case-insensitive by default).
+#
+# The generated header supplies the shebang, "set -eu", --help, and the BASE
+# directory; this fragment defines the work area and the awk helper library.
 # ---------------------------------------------------------------------------
-set -eu
-
-# Optional first argument: a base directory that relative input/output paths
-# resolve against (the analog of -BasePath in the PowerShell script).
-BASE="${1:-.}"
-cd "$BASE"
-
 WORK="$(mktemp -d 2>/dev/null || mktemp -d -t pspl)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 US=$(printf '\037')
