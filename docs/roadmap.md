@@ -8,18 +8,25 @@ never do.
 
 ## Status
 
-Done:
+Foundation (done):
 1. Plain-text format scope (delimited, fixed-width, JSON; Excel and XML deliberately excluded).
 2. Backend interface + in-browser PowerShell generation (the designer emits a zero-dependency `.ps1`).
 3. POSIX `sh` + `awk` backend for *nix.
 4. Designer data preview: schema-aware column propagation, live per-node row preview, column-aware field builders, undo/redo, read-only input path.
 
-Next up (in priority order):
-- M / Power Query export backend (see below) -- the current top priority.
-- The Power Query transform-parity track (see below).
+Backends (done): all four targets ship -- PowerShell, POSIX `sh`+`awk`, the in-browser
+preview executor (`tools/samplerun.js`), and the Power Query **M** export (see the M section
+below). Every node is implemented across all four, except where a target deliberately declines
+(awk declines pivot; the M and shell targets decline a few input types). Where a node is
+runtime-verifiable it is diffed byte-for-byte against the PowerShell oracle; M is verified
+structurally.
 
-Parked / undecided:
-- PowerShell 7+ parallel target (`ForEach-Object -Parallel` over independent DAG branches; opt-in, order-preserving). Deprioritized in favor of the M work. May revisit if a large-data, less-restricted use case arises and a PowerShell 7 verification environment is available. Not committed.
+Transform-parity track (done): all nine numbered M-gap items below are implemented.
+
+Remaining (small, data-dependent tails of otherwise-finished items):
+- **Combine-all-files-in-a-folder** -- a folder input source (item 1).
+- **Split-into-N-columns** -- column count is data-dependent (item 3).
+- **Rank** aggregation -- cross-engine tie-ordering parity is the fiddly bit (item 7).
 
 ## Design rule for everything below
 
@@ -62,9 +69,21 @@ Most nodes map almost directly:
 | `transform.distinct` | `Table.Distinct` |
 | `transform.join` | `Table.NestedJoin` + `Table.ExpandTableColumn` |
 | `transform.aggregate` | `Table.Group` |
+| `transform.conditional` | `Table.AddColumn` + nested `if`/`then`/`else` |
+| `transform.text` | `Text.Trim` / `Text.Lower` / `Text.Upper` / `Text.Proper` / `Text.BetweenDelimiters` ... |
+| `transform.limit` | `Table.FirstN` / `Table.LastN` / `Table.Range` |
+| `transform.index` | `Table.AddIndexColumn` |
+| `transform.replace` | `Table.ReplaceValue` |
+| `transform.fill` | `Table.FillDown` / `Table.FillUp` |
+| `transform.union` | `Table.Combine` |
+| `transform.date` | `Date.Year` / `Date.Month` / `Date.DayOfWeek` / `Date.ToText` / `Duration.Days` |
+| `transform.cast` | `Table.TransformColumnTypes` |
+| `transform.unpivot` | `Table.UnpivotOtherColumns` |
+| `transform.pivot` | `Table.Pivot` |
 
-Multi-input DAGs (joins) map to multiple `let` queries. A bonus: emitting M is a
-third-party validation of our pipeline semantics.
+Multi-input DAGs (joins, unions) map to multiple `let` queries. A bonus: emitting M is a
+third-party validation of our pipeline semantics. The only node the M export does not
+cover is fixed-width input (`input.fixedwidth`), which it declines.
 
 ## Planned: transform parity with Power Query (the "M-gaps")
 
@@ -100,8 +119,8 @@ constraints.
    as the per-backend feasibility rule allows.
 6. **Richer aggregations** DONE -- Median, CountDistinct (case-insensitive), and StringJoin
    added to the aggregate node across all engines (PS/awk/preview/M), verified byte-equal.
-   **Type casting still pending** (a light number/date normalize node, mainly useful for the
-   M export's typing).
+   The light type-cast layer that was the other half of this item shipped with item 4 as the
+   `transform.cast` node.
 7. **Row operations:** DONE except rank -- `transform.limit` (top-N / bottom-N / row range),
    `transform.index`, `transform.replace`, `transform.fill` (down/up). **Rank still pending**
    (its cross-engine tie-ordering parity is the one fiddly bit).
@@ -114,7 +133,12 @@ constraints.
    run time. (Tokens anywhere in config work in PowerShell; the shell target restricts them
    to paths.)
 
-### Level of effort and sequencing
+### Level of effort and sequencing (retrospective)
+
+All nine items have since shipped, so the table below is kept as a record of the original
+estimate and how it landed. Two predictions were beaten: dates were expected to be PS + M
+only, but a self-implemented Julian Day Number made them byte-equal in awk too; and the
+type-cast layer folded into the date work rather than the aggregation work.
 
 LOE is driven less by transform logic (most is simple) than by a structural tax: each new
 node is implemented in **three engines** (PowerShell, awk via `shellgen.js`, and the
@@ -128,9 +152,9 @@ half to one session, L = one or more sessions).
 | 1 | Union / append (+ folder) | M-L | New **variable-arity input ports** in the designer (canvas/connection infra; ports are fixed today). Folder = multi-file read. | OK (header-union); folder = shell loop |
 | 2 | Conditional column | M | A **nested rules-builder UI** (conditions inside rules); logic reuses existing condition eval. | OK (reuse `condExpr`) |
 | 3 | Text functions | M-L (group) | Many small nodes; **split-into-N-columns** has a data-dependent column count. | OK |
-| 4 | Date/time + light type layer | L | **Cross-engine date-format parity is the hardest correctness problem in the track**; type layer is cross-cutting. | Hard (no POSIX date) -> likely PS + M only |
-| 5 | Pivot / unpivot | M (unpivot) + L (pivot) | Pivot output columns are **data-dependent** (runtime discovery). | unpivot OK; pivot hard -> PS + M only |
-| 6 | Type cast + richer aggregations | M | median/percentile need in-group sort; mostly extends the aggregate node. | moderate |
+| 4 | Date/time + light type layer | L | **Cross-engine date-format parity is the hardest correctness problem in the track**; type layer is cross-cutting. | Predicted PS + M only; **actually all engines** via self-implemented JDN |
+| 5 | Pivot / unpivot | M (unpivot) + L (pivot) | Pivot output columns are **data-dependent** (runtime discovery). | unpivot all engines; pivot -> PS + M only (awk declines) |
+| 6 | Type cast + richer aggregations | M | median/percentile need in-group sort; mostly extends the aggregate node. | all engines (cast shipped with item 4) |
 | 7 | Row operations | M (a bag of S's) | Each is small/easy; volume is the cost. | OK |
 | 8 | Designer column profiling | S-M | Designer/preview only, **no backend codegen**. | n/a |
 | 9 | Pipeline-level parameters | M | Cross-cutting: every backend's wrapper + a designer binding UI. | moderate |
@@ -138,9 +162,9 @@ half to one session, L = one or more sessions).
 Two things that change the math:
 
 - **The M backend is a verification cliff.** M output cannot be runtime-verified in this
-  environment (no Excel / Power Query engine), exactly like the parked PS7 target. PowerShell,
-  awk, and preview get diffed against the oracle; M can only be syntax-shaped until it is run
-  in Excel/Power BI. Do not couple parity tightly to M before accepting that.
+  environment (no Excel / Power Query engine). PowerShell, awk, and preview get diffed against
+  the oracle; M can only be syntax-shaped until it is run in Excel/Power BI. Do not couple
+  parity tightly to M before accepting that.
 - **Data-dependent columns** (split-into-N, pivot) are the recurring hard case: when output
   columns depend on the data, static schema propagation and the downstream column-aware
   dropdowns degrade, and the backends must discover columns at runtime.
